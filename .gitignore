@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Local Weki index and user documents
+.weki-data/
+test_data/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Logs and OS/editor files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
