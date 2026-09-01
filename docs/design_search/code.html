@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+
+<html lang="ko"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Weki - Local Search</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "inverse-primary": "#bdc2ff",
+                      "surface-container-highest": "#e1e3e4",
+                      "tertiary-container": "#5c1800",
+                      "tertiary": "#380b00",
+                      "tertiary-fixed": "#ffdbd0",
+                      "on-secondary": "#ffffff",
+                      "on-primary-fixed-variant": "#343d96",
+                      "surface-bright": "#f8f9fa",
+                      "primary-fixed-dim": "#bdc2ff",
+                      "status-pending": "#9E9E9E",
+                      "secondary-container": "#8596ff",
+                      "on-primary-container": "#8690ee",
+                      "inverse-surface": "#2e3132",
+                      "status-paused": "#FF9800",
+                      "on-tertiary-fixed-variant": "#7b2e12",
+                      "on-primary": "#ffffff",
+                      "tertiary-fixed-dim": "#ffb59d",
+                      "surface-tint": "#4c56af",
+                      "relevance-high": "#1B5E20",
+                      "surface-dim": "#d9dadb",
+                      "status-processing": "#2196F3",
+                      "primary-container": "#1a237e",
+                      "inverse-on-surface": "#f0f1f2",
+                      "status-partial": "#FFB300",
+                      "on-surface": "#191c1d",
+                      "surface-container-lowest": "#ffffff",
+                      "source-native": "#E8EAF6",
+                      "on-background": "#191c1d",
+                      "status-warning": "#ED6C02",
+                      "surface": "#f8f9fa",
+                      "surface-variant": "#e1e3e4",
+                      "status-failed": "#D32F2F",
+                      "source-user": "#F3E5F5",
+                      "on-secondary-fixed": "#00105c",
+                      "surface-container-high": "#e7e8e9",
+                      "surface-container": "#edeeef",
+                      "error": "#ba1a1a",
+                      "on-secondary-fixed-variant": "#293ca0",
+                      "on-tertiary-fixed": "#390c00",
+                      "error-container": "#ffdad6",
+                      "outline-variant": "#c6c5d4",
+                      "secondary-fixed": "#dee0ff",
+                      "on-tertiary": "#ffffff",
+                      "primary": "#000666",
+                      "outline": "#767683",
+                      "on-secondary-container": "#11278e",
+                      "secondary-fixed-dim": "#bac3ff",
+                      "surface-container-low": "#f3f4f5",
+                      "on-error-container": "#93000a",
+                      "on-primary-fixed": "#000767",
+                      "on-error": "#ffffff",
+                      "background": "#f8f9fa",
+                      "on-tertiary-container": "#e17c5a",
+                      "primary-fixed": "#e0e0ff",
+                      "on-surface-variant": "#454652",
+                      "status-success": "#4CAF50",
+                      "secondary": "#4355b9"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "sidebar-width": "260px",
+                      "gutter": "1rem",
+                      "stack-gap": "0.75rem",
+                      "card-padding": "1.25rem",
+                      "container-max-width": "1200px"
+              },
+              "fontFamily": {
+                      "body-md": ["IBM Plex Sans"],
+                      "system-mono": ["JetBrains Mono"],
+                      "metric-value": ["JetBrains Mono"],
+                      "body-sm": ["IBM Plex Sans"],
+                      "metadata-label": ["IBM Plex Sans"],
+                      "evidence-text": ["IBM Plex Sans"],
+                      "headline-md": ["IBM Plex Sans"],
+                      "headline-lg": ["IBM Plex Sans"],
+                      "headline-sm": ["IBM Plex Sans"]
+              },
+              "fontSize": {
+                      "body-md": ["14px", {"lineHeight": "22px", "fontWeight": "400"}],
+                      "system-mono": ["12px", {"lineHeight": "18px", "fontWeight": "400"}],
+                      "metric-value": ["16px", {"lineHeight": "20px", "fontWeight": "700"}],
+                      "body-sm": ["13px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "metadata-label": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                      "evidence-text": ["14px", {"lineHeight": "24px", "fontWeight": "400"}],
+                      "headline-sm": ["16px", {"lineHeight": "24px", "fontWeight": "600"}],
+                      "headline-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                      "headline-lg": ["28px", {"lineHeight": "36px", "letterSpacing": "-0.02em", "fontWeight": "600"}]
+              }
+            }
+          }
+        }
+    </script>
+</head>
+<body class="bg-surface text-on-surface font-body-md antialiased overflow-hidden">
+<!-- SideNavBar (Shared Component) -->
+<nav class="bg-surface-container-low font-body-md text-body-md fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant flex flex-col py-4 z-30">
+<div class="px-6 pb-6 pt-2">
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Weki</h1>
+<p class="font-metadata-label text-metadata-label text-on-surface-variant uppercase mt-1 tracking-wider">Local Knowledge</p>
+</div>
+<ul class="flex-1 space-y-1">
+<!-- Active Tab: Search -->
+<li class="px-3">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-l-none rounded-r-lg text-primary font-bold border-r-2 border-primary bg-primary/5 opacity-80 hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">search</span>
+                    Search
+                </a>
+</li>
+<!-- Inactive Tabs -->
+<li class="px-3">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">sync</span>
+                    Jobs
+                </a>
+</li>
+<li class="px-3">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">inventory_2</span>
+                    Library
+                </a>
+</li>
+<li class="px-3">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+                    Settings
+                </a>
+</li>
+</ul>
+</nav>
+<!-- Main Workspace -->
+<div class="ml-[260px] w-[calc(100%-260px)] h-screen flex flex-col relative bg-surface-bright bg-surface-container-low">
+<!-- TopAppBar (Shared Component) -->
+<header class="bg-surface border-b border-outline-variant flex justify-between items-center h-14 px-gutter docked full-width top-0 shrink-0 z-20">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 bg-primary-container text-on-primary-container px-2.5 py-1 rounded-full border border-primary/10 shadow-sm">
+<span class="material-symbols-outlined text-[16px]">lock</span>
+<span class="font-metadata-label text-metadata-label tracking-wide uppercase">Local AI Only</span>
+</div>
+</div>
+<div class="flex gap-2 text-on-surface-variant">
+<button class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-[20px]">memory</span>
+</button>
+<button class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-[20px]">cloud_done</span>
+</button>
+</div>
+</header>
+<!-- Scrollable Content Area -->
+<main class="flex-1 overflow-y-auto pb-32">
+<!-- User Query Context Banner -->
+<div class="max-w-[800px] mx-auto w-full p-gutter pt-8 flex flex-col gap-8">
+<!-- User Message Bubble -->
+<div class="flex flex-col items-end gap-2">
+<div class="flex items-center gap-2 text-on-surface-variant font-metadata-label text-metadata-label pr-2">
+<span>You</span>
+<span class="material-symbols-outlined text-[14px]">person</span>
+</div>
+<div class="bg-primary text-on-primary p-4 rounded-xl rounded-tr-none shadow-sm max-w-[80%]">
+<p class="font-headline-sm text-headline-sm">"DRT 도입을 검토한 자료 찾아줘."</p>
+</div>
+</div>
+<!-- AI Response Block -->
+<div class="flex flex-col items-start gap-4">
+<div class="flex items-center gap-2 text-primary font-metadata-label text-metadata-label pl-2">
+<span class="material-symbols-outlined text-[18px]">search_spark</span>
+<span>Weki AI</span>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant/50 p-6 rounded-xl rounded-tl-none shadow-md w-full flex flex-col gap-6">
+<div class="flex flex-col gap-2">
+<p class="font-body-md text-on-surface">Found 12 matching evidence blocks across 4 documents in local library.</p>
+<div class="h-px bg-outline-variant/30 w-full my-2"></div>
+</div>
+<!-- Evidence Cards Container -->
+<div class="flex flex-col gap-stack-gap"><!-- Evidence Card 1 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-card-padding flex flex-col gap-5 shadow-sm hover:border-primary/30 transition-colors"><div class="flex justify-between items-start"><div class="flex items-start gap-3"><div class="w-10 h-10 mt-1 bg-source-native rounded border border-outline-variant/30 flex items-center justify-center text-primary"><span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">picture_as_pdf</span></div><div><h3 class="font-headline-sm text-headline-sm font-semibold text-primary">2023_스마트모빌리티_추진계획_최종.pdf</h3><div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-on-surface-variant font-metadata-label text-metadata-label mt-1.5"><span class="flex items-center gap-1 text-on-surface bg-surface-container px-1.5 py-0.5 rounded border border-outline-variant/50"><span class="material-symbols-outlined text-[14px]">find_in_page</span> p.36</span><span class="text-outline">•</span><span>Range: p.35~37</span><span class="text-outline">•</span><span>Policy Doc</span></div></div></div><div class="bg-relevance-high/10 text-relevance-high font-metric-value text-metric-value px-3 py-1.5 rounded border border-relevance-high/20 flex items-center gap-1.5 shadow-sm">94 <span class="material-symbols-outlined text-[16px]">verified</span></div></div><div class="flex flex-wrap gap-2"><span class="bg-surface-container-high px-2.5 py-1 rounded-sm font-system-mono text-system-mono text-on-surface flex items-center gap-1.5 border border-outline-variant/50"><span class="w-1.5 h-1.5 rounded-full bg-secondary"></span> Topic: 수요응답형교통</span><span class="bg-surface-container-high px-2.5 py-1 rounded-sm font-system-mono text-system-mono text-on-surface flex items-center gap-1.5 border border-outline-variant/50"><span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span> Feat: 운영효율성</span></div><div class="bg-surface-container-low border border-outline-variant/60 rounded-lg p-5 relative"><div class="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-l-lg"></div><p class="font-evidence-text text-evidence-text text-on-surface leading-relaxed whitespace-pre-wrap">...기존 고정노선 버스의 비효율성을 극복하기 위해 <mark class="bg-status-partial/30 text-on-surface font-semibold px-1 rounded mx-0.5 border-b border-status-partial/50">DRT (수요응답형교통)</mark> 도입을 적극 검토함. 특히 신도시 외곽 지역 및 심야 시간대 이동권 보장을 위한 핵심 대안으로 평가되며, 시뮬레이션 결과 평균 대기 시간 30% 감소 및 운영 비용 15% 절감 효과가 예상됨. 초기 시범 사업은 2개 지구에서...</p></div><div class="flex justify-between items-center pt-2 border-t border-outline-variant/40 mt-1"><button class="text-primary hover:text-primary-container font-body-sm text-body-sm font-semibold flex items-center gap-1 transition-colors">Open Original Document <span class="material-symbols-outlined text-[16px]">open_in_new</span></button><div class="flex gap-2"><button class="px-3 py-1.5 rounded-md border border-outline-variant text-on-surface-variant font-metadata-label text-metadata-label hover:bg-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px]">thumb_up</span> Relevant</button><button class="px-3 py-1.5 rounded-md border border-outline-variant text-on-surface-variant font-metadata-label text-metadata-label hover:bg-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px]">thumb_down</span></button></div></div></div>
+<!-- Evidence Card 2 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-card-padding flex flex-col gap-5 shadow-sm hover:border-primary/30 transition-colors"><div class="flex justify-between items-start"><div class="flex items-start gap-3"><div class="w-10 h-10 mt-1 bg-source-user rounded border border-outline-variant/30 flex items-center justify-center text-primary"><span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">slideshow</span></div><div><h3 class="font-headline-sm text-headline-sm font-semibold text-primary">교통혁신_TFT_주간보고_04.pptx</h3><div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-on-surface-variant font-metadata-label text-metadata-label mt-1.5"><span class="flex items-center gap-1 text-on-surface bg-surface-container px-1.5 py-0.5 rounded border border-outline-variant/50"><span class="material-symbols-outlined text-[14px]">find_in_page</span> Slide 12</span><span class="text-outline">•</span><span>Presentation</span></div></div></div><div class="bg-relevance-high/5 text-on-surface font-metric-value text-metric-value px-3 py-1.5 rounded border border-outline-variant/50 flex items-center gap-1.5">88 <span class="material-symbols-outlined text-[16px] text-status-success">check</span></div></div><div class="flex gap-4"><div class="w-48 h-32 shrink-0 rounded border border-outline-variant/50 bg-surface-container overflow-hidden relative group cursor-pointer"><div class="absolute inset-0 bg-primary/0 group-hover:bg-primary/10 transition-colors z-10 flex items-center justify-center"><span class="material-symbols-outlined text-white opacity-0 group-hover:opacity-100 drop-shadow-md">zoom_in</span></div><div class="w-full h-full bg-cover bg-center" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuC6au4rsigsblPwu_U7gyeslypPIz4lyjZ90xdNw-l2XdwA_PM03Vnxrer4CwmjajXzNprZQKchcefsIQgqdvAzQ_A6t6oUzuPSkRbxeikzZe1daLL0UccWjt0Ky03qRazqH0fadLyTSNlLWCpDnJf_gNE8huQ1DQ81UC67ydU33rm0zwiGETrvYyPRaD9sctbFnmEJ6Od5hvqTelQ-37QpZiWiKbwB7G4WsrBc65-vCCxX6ti6B3g')"></div></div><div class="flex-1 bg-surface-container-low border border-outline-variant/60 rounded-lg p-4 relative flex flex-col justify-center"><p class="font-evidence-text text-evidence-text text-on-surface text-sm leading-relaxed">Slide title: "지자체 연계 <mark class="bg-status-partial/30 px-1 rounded font-semibold border-b border-status-partial/50">DRT</mark> 확장 모델"<br/>Bullet points extracted:<br/>- 외곽 산업단지 출퇴근 지원을 위한 기업형 DRT 우선 도입 검토<br/>- 기존 마을버스 노선과 중복을 피하는 라우팅 알고리즘 필요</p></div></div><div class="flex justify-between items-center pt-2 border-t border-outline-variant/40 mt-1"><button class="text-primary hover:text-primary-container font-body-sm text-body-sm font-semibold flex items-center gap-1 transition-colors">Open Slide <span class="material-symbols-outlined text-[16px]">open_in_new</span></button><div class="flex gap-2"><button class="px-3 py-1.5 rounded-md border border-outline-variant text-on-surface-variant font-metadata-label text-metadata-label hover:bg-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px]">thumb_up</span></button><button class="px-3 py-1.5 rounded-md border border-outline-variant text-on-surface-variant font-metadata-label text-metadata-label hover:bg-surface-variant hover:text-on-surface transition-colors flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px]">thumb_down</span></button></div></div></div></div>
+<button class="w-full py-3 border border-outline-variant border-dashed rounded-lg text-primary font-body-sm font-semibold hover:bg-primary/5 transition-colors flex items-center justify-center gap-2">
+        View all 12 results <span class="material-symbols-outlined text-[18px]">open_in_full</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+<!-- Chat Input (Fixed Bottom) -->
+<div class="fixed bottom-0 left-[260px] right-0 bg-surface/90 backdrop-blur-md border-t border-outline-variant p-6 z-20 flex justify-center pb-8">
+<div class="w-full max-w-[800px] relative shadow-lg rounded-xl">
+<div class="absolute top-1/2 -translate-y-1/2 left-5 flex items-center pointer-events-none text-primary">
+<span class="material-symbols-outlined text-[24px]">search_spark</span>
+</div>
+<input class="w-full bg-surface-container-lowest border border-primary/40 focus:border-primary rounded-xl py-4 pl-14 pr-16 font-body-md text-body-md text-on-surface outline-none transition-colors shadow-inner" placeholder="Ask a question or search your local knowledge base..." type="text" value="DRT 도입을 검토한 자료 찾아줘."/>
+<button class="absolute top-1/2 -translate-y-1/2 right-2 w-10 h-10 bg-primary text-on-primary rounded-lg flex items-center justify-center hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[20px]">arrow_upward</span>
+</button>
+</div>
+</div>
+</div>
+</body></html>

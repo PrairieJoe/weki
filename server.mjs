@@ -47,6 +47,16 @@ async function readDb() {
   return db;
 }
 async function writeDb(db) { await fs.writeFile(dbPath, JSON.stringify(db, null, 2)); }
+async function readStorageStats() {
+  try {
+    const { bsize, blocks, bavail } = await fs.statfs(dataDir);
+    const total = Number(bsize) * Number(blocks);
+    const available = Number(bsize) * Number(bavail);
+    return { usage: Math.max(0, total - available), available, total };
+  } catch {
+    return { usage: 0, available: 0, total: 0 };
+  }
+}
 class JobInterrupted extends Error {
   constructor(status) { super(status === "paused" ? "작업이 일시중지되었습니다." : "작업이 취소되었습니다."); this.status = status; }
 }
@@ -248,7 +258,17 @@ const app = express();
 app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024, files: 30 } });
 app.get("/api/documents", async (_req, res) => { const db = await readDb(); res.json({ documents: db.documents.map(({ units, ...doc }) => ({ ...doc, pages: units.length })) }); });
-app.get("/api/status", async (_req, res) => { const db = await readDb(); res.json({ documentCount: db.documents.length, indexedUnits: db.documents.reduce((count, doc) => count + doc.units.length, 0), engines: { lexical: "healthy", evidence: "healthy" } }); });
+app.get("/api/status", async (_req, res) => {
+  const db = await readDb();
+  const storage = await readStorageStats();
+  res.json({
+    documentCount: db.documents.length,
+    indexedUnits: db.documents.reduce((count, doc) => count + doc.units.length, 0),
+    storage,
+    maintenance: db.maintenance ?? null,
+    engines: { lexical: "healthy", evidence: "healthy" },
+  });
+});
 app.get("/api/jobs", async (_req, res) => { const db = await readDb(); res.json({ jobs: db.jobs }); });
 app.get("/api/audit", async (_req, res) => { const db = await readDb(); res.json({ entries: db.audit.slice(0, 40) }); });
 app.post("/api/search", async (req, res) => { const db = await readDb(); const query = expandQuery(db, req.body.query || ""); res.json({ query: query.normalized, expansions: query.expansions, results: search(db, [query.normalized, ...query.expansions].join(" ")) }); });

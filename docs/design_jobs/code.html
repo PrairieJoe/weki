@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+
+<html class="light" lang="ko"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Weki - Job Management</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Configuration -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-primary": "#bdc2ff",
+                    "surface-container-highest": "#e1e3e4",
+                    "tertiary-container": "#5c1800",
+                    "tertiary": "#380b00",
+                    "tertiary-fixed": "#ffdbd0",
+                    "on-secondary": "#ffffff",
+                    "on-primary-fixed-variant": "#343d96",
+                    "surface-bright": "#f8f9fa",
+                    "primary-fixed-dim": "#bdc2ff",
+                    "status-pending": "#9E9E9E",
+                    "secondary-container": "#8596ff",
+                    "on-primary-container": "#8690ee",
+                    "inverse-surface": "#2e3132",
+                    "status-paused": "#FF9800",
+                    "on-tertiary-fixed-variant": "#7b2e12",
+                    "on-primary": "#ffffff",
+                    "tertiary-fixed-dim": "#ffb59d",
+                    "surface-tint": "#4c56af",
+                    "relevance-high": "#1B5E20",
+                    "surface-dim": "#d9dadb",
+                    "status-processing": "#2196F3",
+                    "primary-container": "#1a237e",
+                    "inverse-on-surface": "#f0f1f2",
+                    "status-partial": "#FFB300",
+                    "on-surface": "#191c1d",
+                    "surface-container-lowest": "#ffffff",
+                    "source-native": "#E8EAF6",
+                    "on-background": "#191c1d",
+                    "status-warning": "#ED6C02",
+                    "surface": "#f8f9fa",
+                    "surface-variant": "#e1e3e4",
+                    "status-failed": "#D32F2F",
+                    "source-user": "#F3E5F5",
+                    "on-secondary-fixed": "#00105c",
+                    "surface-container-high": "#e7e8e9",
+                    "surface-container": "#edeeef",
+                    "error": "#ba1a1a",
+                    "on-secondary-fixed-variant": "#293ca0",
+                    "on-tertiary-fixed": "#390c00",
+                    "error-container": "#ffdad6",
+                    "outline-variant": "#c6c5d4",
+                    "secondary-fixed": "#dee0ff",
+                    "on-tertiary": "#ffffff",
+                    "primary": "#000666",
+                    "outline": "#767683",
+                    "on-secondary-container": "#11278e",
+                    "secondary-fixed-dim": "#bac3ff",
+                    "surface-container-low": "#f3f4f5",
+                    "on-error-container": "#93000a",
+                    "on-primary-fixed": "#000767",
+                    "on-error": "#ffffff",
+                    "background": "#f8f9fa",
+                    "on-tertiary-container": "#e17c5a",
+                    "primary-fixed": "#e0e0ff",
+                    "on-surface-variant": "#454652",
+                    "status-success": "#4CAF50",
+                    "secondary": "#4355b9"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "sidebar-width": "260px",
+                    "gutter": "1rem",
+                    "stack-gap": "0.75rem",
+                    "card-padding": "1.25rem",
+                    "container-max-width": "1200px"
+            },
+            "fontFamily": {
+                    "body-md": ["IBM Plex Sans", "sans-serif"],
+                    "system-mono": ["JetBrains Mono", "monospace"],
+                    "metric-value": ["JetBrains Mono", "monospace"],
+                    "body-sm": ["IBM Plex Sans", "sans-serif"],
+                    "metadata-label": ["IBM Plex Sans", "sans-serif"],
+                    "evidence-text": ["IBM Plex Sans", "sans-serif"],
+                    "headline-md": ["IBM Plex Sans", "sans-serif"],
+                    "headline-lg": ["IBM Plex Sans", "sans-serif"]
+            },
+            "fontSize": {
+                    "body-md": ["14px", {"lineHeight": "22px", "fontWeight": "400"}],
+                    "system-mono": ["12px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "metric-value": ["16px", {"lineHeight": "20px", "fontWeight": "700"}],
+                    "body-sm": ["13px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "metadata-label": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                    "evidence-text": ["14px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "headline-lg": ["28px", {"lineHeight": "36px", "letterSpacing": "-0.02em", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        /* Custom overrides or utilities */
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1; }
+        
+        /* Subtle processing animation */
+        @keyframes indeterminate-progress {
+            0% { transform: translateX(-100%); width: 30%; }
+            50% { width: 50%; }
+            100% { transform: translateX(300%); width: 30%; }
+        }
+        .animate-progress {
+            animation: indeterminate-progress 2s infinite linear;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md min-h-screen selection:bg-primary selection:text-on-primary">
+<!-- Shared Component: SideNavBar -->
+<aside class="bg-surface-container-low fixed left-0 top-0 h-full w-[260px] border-r border-outline-variant flex flex-col py-4 z-20">
+<div class="px-gutter mb-6 flex flex-col">
+<span class="font-headline-md text-headline-md font-bold text-primary">Weki</span>
+<span class="font-metadata-label text-metadata-label text-on-surface-variant uppercase mt-1">Local Knowledge</span>
+</div>
+<nav class="flex-1 flex flex-col gap-1 px-2">
+<!-- Search: Inactive -->
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group cursor-pointer" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-on-surface transition-colors">search</span>
+<span class="font-body-md text-body-md group-hover:text-on-surface transition-colors">Search</span>
+</a>
+<!-- Jobs: Active (Semantic Match for Processing Job Management) -->
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-primary font-bold border-r-2 border-primary bg-primary/5 transition-opacity opacity-80 cursor-default" href="#">
+<span class="material-symbols-outlined icon-fill text-primary">sync</span>
+<span class="font-body-md text-body-md">Jobs</span>
+</a>
+<!-- Library: Inactive -->
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group cursor-pointer" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-on-surface transition-colors">inventory_2</span>
+<span class="font-body-md text-body-md group-hover:text-on-surface transition-colors">Library</span>
+</a>
+<!-- Settings: Inactive -->
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group cursor-pointer mt-auto" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-on-surface transition-colors">settings</span>
+<span class="font-body-md text-body-md group-hover:text-on-surface transition-colors">Settings</span>
+</a>
+</nav>
+</aside>
+<!-- Shared Component: TopAppBar -->
+<header class="bg-surface border-b border-outline-variant flex justify-between items-center h-14 px-gutter ml-[260px] w-[calc(100%-260px)] fixed top-0 z-10 transition-transform">
+<div class="flex items-center">
+<!-- Brand is handled in sidebar, keeping header clean per minimalist structural guidance -->
+<span class="font-headline-sm text-headline-sm font-black text-primary opacity-0 pointer-events-none hidden md:block">Weki</span>
+</div>
+<div class="flex items-center gap-4">
+<button aria-label="System Memory" class="text-on-surface-variant hover:text-on-surface transition-colors flex items-center justify-center p-1 rounded-md hover:bg-surface-container-high">
+<span class="material-symbols-outlined">memory</span>
+</button>
+<button aria-label="Cloud Sync" class="text-on-surface-variant hover:text-on-surface transition-colors flex items-center justify-center p-1 rounded-md hover:bg-surface-container-high">
+<span class="material-symbols-outlined">cloud_done</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-[260px] mt-14 p-gutter h-[calc(100vh-3.5rem)] overflow-y-auto">
+<div class="max-w-container-max-width mx-auto flex flex-col gap-stack-gap">
+<!-- Partial Failure Banner (System Requirement) -->
+<div class="bg-status-warning text-on-primary font-system-mono text-system-mono font-bold px-4 py-2 rounded-DEFAULT flex items-center justify-between shadow-sm">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined icon-fill">warning</span>
+<span>WARN: 3 files in [Batch_992] failed OCR extraction. Reprocessing recommended.</span>
+</div>
+<button class="text-on-primary underline hover:opacity-80">View Logs</button>
+</div>
+<!-- Header -->
+<div class="mb-4 mt-2">
+<h1 class="font-headline-lg text-headline-lg text-on-surface">문서 등록 및 처리 작업</h1>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">로컬 지식 베이스에 새 문서를 추가하고 인덱싱 대기열을 관리합니다.</p>
+</div>
+<!-- Bento Grid Layout for Sections -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-stack-gap">
+<!-- Register Documents Section -->
+<section class="lg:col-span-5 bg-surface-container-lowest border border-outline-variant rounded-xl p-card-padding flex flex-col gap-6 shadow-[0_2px_4px_-0px_rgba(0,0,0,0.02)]">
+<div class="flex items-center gap-2 border-b border-outline-variant pb-3">
+<span class="material-symbols-outlined text-primary">add_box</span>
+<h2 class="font-headline-md text-headline-md text-on-surface">Register Documents</h2>
+</div>
+<!-- Actions -->
+<div class="flex flex-col sm:flex-row gap-3">
+<button class="flex-1 bg-primary text-on-primary font-body-sm text-body-sm font-semibold py-2 px-4 rounded-md shadow-sm hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">upload_file</span>
+                            파일 선택
+                        </button>
+<button class="flex-1 bg-surface-container-lowest text-primary border border-primary font-body-sm text-body-sm font-semibold py-2 px-4 rounded-md hover:bg-primary/5 transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">folder_open</span>
+                            폴더 선택
+                        </button>
+</div>
+<!-- Processing Mode -->
+<div class="flex flex-col gap-3 mt-2">
+<label class="font-metadata-label text-metadata-label text-on-surface-variant uppercase">Processing Mode (처리 모드)</label>
+<div class="flex flex-col gap-2">
+<label class="flex items-start gap-3 p-3 rounded-lg border border-outline-variant hover:bg-surface-container-low cursor-pointer transition-colors bg-surface-container-low">
+<input checked="" class="mt-0.5 text-primary focus:ring-primary h-4 w-4 border-outline-variant bg-surface-container-lowest" name="proc_mode" type="radio"/>
+<div class="flex flex-col">
+<span class="font-body-md text-body-md font-semibold text-on-surface">Lightweight Only</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">빠른 텍스트 추출 및 기본 메타데이터 색인 (로컬 전용).</span>
+</div>
+</label>
+<label class="flex items-start gap-3 p-3 rounded-lg border border-outline-variant hover:bg-surface-container-low cursor-pointer transition-colors">
+<input class="mt-0.5 text-primary focus:ring-primary h-4 w-4 border-outline-variant bg-surface-container-lowest" name="proc_mode" type="radio"/>
+<div class="flex flex-col">
+<span class="font-body-md text-body-md font-semibold text-on-surface">Local AI Allowed</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">로컬 모델을 활용한 심층 임베딩 및 엔티티 인식. 속도 저하 가능성.</span>
+</div>
+</label>
+<label class="flex items-start gap-3 p-3 rounded-lg border border-outline-variant hover:bg-surface-container-low cursor-pointer transition-colors">
+<input class="mt-0.5 text-primary focus:ring-primary h-4 w-4 border-outline-variant bg-surface-container-lowest" name="proc_mode" type="radio"/>
+<div class="flex flex-col flex-1">
+<div class="flex justify-between items-center w-full">
+<span class="font-body-md text-body-md font-semibold text-on-surface">External AI Allowed</span>
+<span class="material-symbols-outlined text-[16px] text-status-warning" title="Requires API Key">key</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">최고 품질의 구조화 및 요약을 위해 외부 API 사용.</span>
+</div>
+</label>
+</div>
+</div>
+</section>
+<!-- Processing Queue Section -->
+<section class="lg:col-span-7 flex flex-col gap-stack-gap">
+<!-- Current Job (Active state card) -->
+<div class="bg-surface-container-lowest border-l-4 border-l-status-processing border-y border-r border-outline-variant rounded-r-xl p-card-padding flex flex-col gap-4 relative overflow-hidden shadow-[0_4px_8px_-0px_rgba(0,0,0,0.05)]">
+<div class="flex justify-between items-start">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-processing animate-spin icon-fill">autorenew</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">현재 작업</h3>
+</div>
+<div class="flex gap-2">
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center p-1.5 rounded bg-surface-container-low hover:bg-surface-container" title="일시정지 (Pause)">
+<span class="material-symbols-outlined text-[20px]">pause</span>
+</button>
+<button class="text-on-surface-variant hover:text-status-failed transition-colors flex items-center justify-center p-1.5 rounded bg-surface-container-low hover:bg-error-container" title="취소 (Cancel)">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+</div>
+<div class="bg-surface p-3 rounded-md border border-outline-variant flex flex-col gap-1">
+<div class="flex justify-between items-end">
+<span class="font-system-mono text-system-mono font-bold text-on-surface truncate">Q3_Financial_Report_Final_v2.pdf</span>
+<span class="font-metric-value text-metric-value text-primary">68%</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">상태: OCR 진행 중 (Page 12/45)...</span>
+</div>
+<!-- Progress Bar Container -->
+<div class="h-1.5 w-full bg-surface-container-high rounded-full overflow-hidden absolute bottom-0 left-0">
+<div class="h-full bg-status-processing animate-progress rounded-full"></div>
+</div>
+</div>
+<!-- Pending Jobs & History (Table format for high density) -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl flex-1 flex flex-col shadow-[0_2px_4px_-0px_rgba(0,0,0,0.02)] overflow-hidden">
+<!-- Tabs -->
+<div class="flex border-b border-outline-variant bg-surface-container-low">
+<button class="px-4 py-2.5 font-body-sm text-body-sm font-semibold text-primary border-b-2 border-primary bg-surface-container-lowest">대기 중 (4)</button>
+<button class="px-4 py-2.5 font-body-sm text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">작업 기록</button>
+</div>
+<!-- Table Content -->
+<div class="flex-1 overflow-x-auto">
+<table class="w-full text-left border-collapse min-w-[500px]">
+<thead>
+<tr class="bg-surface-container-lowest border-b border-outline-variant">
+<th class="p-3 font-metadata-label text-metadata-label text-on-surface-variant uppercase w-10">순서</th>
+<th class="p-3 font-metadata-label text-metadata-label text-on-surface-variant uppercase">문서명</th>
+<th class="p-3 font-metadata-label text-metadata-label text-on-surface-variant uppercase w-24">모드</th>
+<th class="p-3 font-metadata-label text-metadata-label text-on-surface-variant uppercase text-right w-24">관리</th>
+</tr>
+</thead>
+<tbody class="font-body-sm text-body-sm text-on-surface">
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-3 font-system-mono text-system-mono text-on-surface-variant">#1</td>
+<td class="p-3 truncate max-w-[200px]" title="Technical_Spec_Architecture_v1.docx">Technical_Spec_Architecture_v1.docx</td>
+<td class="p-3"><span class="px-2 py-0.5 rounded-sm bg-surface-container text-on-surface-variant text-[11px] font-semibold border border-outline-variant">Local AI</span></td>
+<td class="p-3 text-right">
+<div class="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="text-on-surface-variant hover:text-status-failed"><span class="material-symbols-outlined text-[18px]">delete</span></button>
+</div>
+</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-3 font-system-mono text-system-mono text-on-surface-variant">#2</td>
+<td class="p-3 truncate max-w-[200px]">Meeting_Notes_2023_10_24.txt</td>
+<td class="p-3"><span class="px-2 py-0.5 rounded-sm bg-surface-container text-on-surface-variant text-[11px] font-semibold border border-outline-variant">Light</span></td>
+<td class="p-3 text-right">
+<div class="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="text-on-surface-variant hover:text-status-failed"><span class="material-symbols-outlined text-[18px]">delete</span></button>
+</div>
+</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-3 font-system-mono text-system-mono text-on-surface-variant">#3</td>
+<td class="p-3 truncate max-w-[200px]">Employee_Handbook_2024.pdf</td>
+<td class="p-3"><span class="px-2 py-0.5 rounded-sm bg-surface-container text-on-surface-variant text-[11px] font-semibold border border-outline-variant">Ext AI</span></td>
+<td class="p-3 text-right">
+<div class="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="text-on-surface-variant hover:text-status-failed"><span class="material-symbols-outlined text-[18px]">delete</span></button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="p-3 font-system-mono text-system-mono text-on-surface-variant">#4</td>
+<td class="p-3 truncate max-w-[200px]">Client_List_Backup_Q3.csv</td>
+<td class="p-3"><span class="px-2 py-0.5 rounded-sm bg-surface-container text-on-surface-variant text-[11px] font-semibold border border-outline-variant">Light</span></td>
+<td class="p-3 text-right">
+<div class="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="text-on-surface-variant hover:text-status-failed"><span class="material-symbols-outlined text-[18px]">delete</span></button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+<script>
+        // Simple JS for radio button styling toggle
+        document.querySelectorAll('input[name="proc_mode"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                // Reset all
+                document.querySelectorAll('input[name="proc_mode"]').forEach(r => {
+                    r.closest('label').classList.remove('bg-surface-container-low');
+                });
+                // Highlight active
+                if(this.checked) {
+                    this.closest('label').classList.add('bg-surface-container-low');
+                }
+            });
+        });
+    </script>
+</body></html>
