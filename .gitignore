@@ -2,6 +2,18 @@
 node_modules/
 dist/
 
+# Packaging and verification output
+/.build-cache/
+/.installer-*/
+/.package-*/
+/release-internal/
+/release-verify*/
+/release-final/
+/release/*.exe
+/release/*.blockmap
+/release/win-unpacked/
+/release/builder-debug.yml
+
 # Local Weki index and user documents
 .weki-data/
 test_data/
