@@ -1,11 +1,11 @@
-Source commit: bb0335609f9180d9e81f78131e8034c4b3c31c51
-Build date/time: 2026-09-07 16:22:52 +09:00
+Source commit: aae004bd29b6c83f02337d751e0c2722b93234a2
+Build date/time: 2026-09-07 17:49:04 +09:00
 Application version: 1.0.0
 Installer file name: Weki-1.0.0-Setup.exe
 Installer path (external archive): final/Weki-1.0.0-Setup.exe
-Installer SHA-256: 7cbc02d637b597e2d2a585a07c7ebc65b245198211fd15bf68355a282afc00f2
-Installer SHA-512: b4ykv4XXg0K46vQMJmRVYXpYHETSVe5KbCEOymi/dGfuk3DQReguOMISwsxgxf1e430/Evo4Pmkmh4lIjrNxJQ==
-npm test: PASS (63 passed, 0 failed)
+Installer SHA-256: 7a52a825ab76525a3342efd0ef37d8d99a24a2440d33f8be2c3cd9d6a40402d2
+Installer SHA-512: sYYqKvBcKDFcyKtyxxSA6AcgqQrrZ5oknpvkLMFyC5RjQ1WFTjDtsBGhHjXzsLrfSVs8c+8RKdaUXrYlZHC9gg==
+npm test: PASS (64 passed, 0 failed)
 npm run build: PASS
 electron-builder --win nsis: PASS
 Packaging check: PASS (packaged version 1.0.0; app.asar and entrypoints present)
