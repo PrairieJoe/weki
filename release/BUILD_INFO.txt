@@ -1,0 +1,15 @@
+Source commit: bb0335609f9180d9e81f78131e8034c4b3c31c51
+Build date/time: 2026-09-07 16:22:52 +09:00
+Application version: 1.0.0
+Installer file name: Weki-1.0.0-Setup.exe
+Installer path: E:\PRJ\weki-release-archive-20260907\final\Weki-1.0.0-Setup.exe
+Installer SHA-256: 7cbc02d637b597e2d2a585a07c7ebc65b245198211fd15bf68355a282afc00f2
+Installer SHA-512: b4ykv4XXg0K46vQMJmRVYXpYHETSVe5KbCEOymi/dGfuk3DQReguOMISwsxgxf1e430/Evo4Pmkmh4lIjrNxJQ==
+npm test: PASS (63 passed, 0 failed)
+npm run build: PASS
+electron-builder --win nsis: PASS
+Packaging check: PASS (packaged version 1.0.0; app.asar and entrypoints present)
+Packaged smoke: PASS (/api/status HTTP 200; lexical/evidence healthy; isolated data directory)
+Installer smoke: PASS (silent install, update, relaunch, data marker preservation)
+REQ-SCALE-001: EXCLUDED FROM THIS RELEASE (follow-up performance validation)
+Release status: FINAL 1.0.0
