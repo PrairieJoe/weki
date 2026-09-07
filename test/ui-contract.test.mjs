@@ -9,6 +9,10 @@ const electronMain = await readFile(new URL("../electron-main.cjs", import.meta.
 const server = await readFile(new URL("../server.mjs", import.meta.url), "utf8");
 const myboxSync = await readFile(new URL("../src/server/mybox-sync.mjs", import.meta.url), "utf8");
 const installer = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");
+const statusApiTest = await readFile(new URL("../test/status-api.test.mjs", import.meta.url), "utf8");
+const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+const runScript = await readFile(new URL("../run-weki.bat", import.meta.url), "utf8");
+const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
 const preload = await readFile(preloadUrl, "utf8").catch(() => "");
@@ -146,6 +150,17 @@ test("Weki accepts a MYBOX token in the installer and stores it outside the pack
   assert.match(server, /WEKI_DISABLE_ENV_FILE/);
   assert.match(server, /MYBOX 토큰이 설정되지 않았습니다\. 관리자에게 문의하세요\./);
   assert.match(main, /MYBOX 토큰이 설정되지 않았습니다\. 관리자에게 문의하세요\./);
+});
+
+test("Weki development files remain portable across checkout paths", () => {
+  assert.doesNotMatch(statusApiTest, /cwd:\s*["'][A-Za-z]:[\\/]/);
+  assert.match(statusApiTest, /fileURLToPath/);
+  assert.match(statusApiTest, /projectRoot/);
+  assert.match(runScript, /call npm ci/);
+  assert.doesNotMatch(runScript, /call npm install/);
+  assert.match(readme, /Node\.js 22\.12\.0/);
+  assert.match(readme, /npm ci/);
+  assert.doesNotMatch(buildInfo, /Installer path: [A-Za-z]:[\\/]/);
 });
 
 test("Weki exposes local MYBOX credential actions without returning the token to the renderer", async () => {

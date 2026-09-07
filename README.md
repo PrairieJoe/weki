@@ -6,6 +6,18 @@ Windows 로컬 문서 근거 검색 앱입니다. 개발 실행에서는 프로�
 
 Windows에서 [run-weki.bat](./run-weki.bat)을 더블클릭하면 서버를 시작하고 Weki를 브라우저로 엽니다.
 
+## 새 개발 PC 설정
+
+Weki 개발 실행과 Windows 패키징은 Windows PC를 기준으로 합니다. Node.js 22.12.0 이상과 npm을 준비한 뒤 저장소 루트에서 lockfile 기준으로 의존성을 설치합니다.
+
+```powershell
+npm ci
+npm test
+npm run build
+```
+
+개발 서버는 `npm run dev`, 데스크톱 창은 `npm run desktop`, Windows 설치파일은 `npm run dist:win`으로 실행합니다. `run-weki.bat`도 최초 실행 시 동일하게 `npm ci`를 사용하므로 PC별 의존성 버전 차이를 줄일 수 있습니다.
+
 개발 환경에서는 다음 명령도 사용할 수 있습니다.
 
 ```powershell

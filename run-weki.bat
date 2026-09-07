@@ -4,10 +4,10 @@ cd /d "%~dp0"
 
 if not exist "node_modules\vite" (
   echo Weki dependencies are being installed for the first run...
-  call npm install
+  call npm ci
   if errorlevel 1 (
     echo.
-    echo Failed to install dependencies. Please check Node.js and your network connection.
+    echo Failed to install the locked dependencies. Please check Node.js and your network connection.
     pause
     exit /b 1
   )

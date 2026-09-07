@@ -7,12 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let nextPort = 5200;
 function startServer(dataDir, extraEnv = {}) {
   const port = nextPort++;
   const child = spawn(process.execPath, ["server.mjs"], {
-    cwd: "E:/PRJ/weki",
+    cwd: projectRoot,
     env: { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_PORT: String(port), WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
