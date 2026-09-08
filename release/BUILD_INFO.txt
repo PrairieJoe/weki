@@ -1,4 +1,4 @@
-Source commit: pending-final-release-commit
+Source commit: ffdd224
 Build date/time: 2026-09-08 22:30:36 +09:00
 Application version: 1.1.0
 Installer file name: Weki-1.1.0-Setup.exe
