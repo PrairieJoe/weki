@@ -16,6 +16,27 @@ test("document renderer returns physical HWPX pages with rendered provenance", a
   assert.match(pages[4].renderedSvg, /^<svg/);
 });
 
+test("document renderer exposes rendered pages as visual OCR evidence when requested", async () => {
+  const renderer = await createDocumentRenderer({ componentPath: path.join(projectRoot, "node_modules", "@rhwp", "core") });
+  const pages = await renderer.extract(await import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, "test_data", "전남광주통합특별시_대전환의_길_교통.hwpx"))), {
+    recognizeRenderedPage: async (svg) => svg.startsWith("<svg") ? "OO시 인구" : "",
+  });
+
+  assert.equal(pages[0].visualAssets[0].name, "page-1.svg");
+  assert.equal(pages[0].visualAssets[0].ocrText, "OO시 인구");
+});
+
+test("document renderer OCRs embedded rendered-page images as visual evidence", async () => {
+  const renderer = await createDocumentRenderer({ componentPath: path.join(projectRoot, "node_modules", "@rhwp", "core") });
+  const pages = await renderer.extract(await import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, "test_data", "전남광주통합특별시_대전환의_길_교통.hwpx"))), {
+    recognizeVisualAsset: async (_bytes, metadata) => metadata.page === 4 ? "노선도 변경구간" : "",
+  });
+
+  const pageWithVisual = pages.find((page) => page.page === 4);
+  assert.ok(pageWithVisual.visualAssets.some((asset) => asset.ocrText === "노선도 변경구간"));
+  assert.match(pageWithVisual.text, /노선도 변경구간/);
+});
+
 test("merges native and OCR text without duplicating identical content", () => {
   assert.equal(mergeNativeAndOcr("광화문 버스", "광화문 버스"), "광화문 버스");
   assert.equal(mergeNativeAndOcr("광화문 버스", "광화문 버스 노선"), "광화문 버스 광화문 버스 노선");

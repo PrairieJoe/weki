@@ -221,6 +221,10 @@ FunctionEnd
 Var WekiRootIndex
 Var WekiRootCount
 !macro customUnInstall
+  ; Stop Weki and its server child before deleting files that may still be locked.
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /T /IM "${APP_EXECUTABLE_FILENAME}"'
+  Pop $0
+  Sleep 500
   ReadRegStr $WekiRootCount HKCU "Software\Weki" "ManagedRootCount"
   ${If} $WekiRootCount == ""
     StrCpy $WekiRootCount "0"

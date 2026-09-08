@@ -16,6 +16,7 @@ dist/
 /release/*.blockmap
 /release/win-unpacked/
 /release/win-unpacked.tmp/
+/release-installer/
 /release/builder-debug.yml
 
 # Local Weki index and user documents

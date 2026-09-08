@@ -8,7 +8,7 @@ import express from "express";
 import multer from "multer";
 import JSZip from "jszip";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { createWorker } from "tesseract.js";
 import engData from "@tesseract.js-data/eng";
 import korData from "@tesseract.js-data/kor";
@@ -20,11 +20,17 @@ import { createMyboxClient } from "./src/server/mybox.mjs";
 import { CLOUD_CATALOG_NAME, CLOUD_RUNTIME_MANIFEST_NAME, CLOUD_RUNTIME_ROOT_NAME, CLOUD_RUNTIME_VERSION_NAME, downloadCloudOriginal, findCloudOriginalResource, findRuntimeFolderStructure, findRuntimeResource, findWekiFolderStructure, mergeCloudCatalog, readCloudCatalog, shouldRunInitialMyboxSync } from "./src/server/mybox-sync.mjs";
 import { documentOriginalKey, migrateLegacyOriginals, normalizeOriginalName, originalNameOf, resolveDocumentOriginalPath } from "./src/server/original-storage.mjs";
 import { createSearchService, RANKING_VERSION } from "./src/search/service.mjs";
+import { buildEvidenceSnippet, formatDisplayScore } from "./src/search/evidence-display.mjs";
+import { expandSynonymQuery, normalizeSynonymCollection, normalizeSynonymEntry, suggestSynonymCandidates, validateSynonymInput } from "./src/search/synonyms.mjs";
+import { matchesRouteConstraints } from "./src/search/query-normalization.mjs";
 import { createSearchStore } from "./src/search/sqlite-store.mjs";
 import { createSemanticEngine } from "./src/search/semantic-engine.mjs";
 import { createAnnIndex } from "./src/search/ann-index.mjs";
 import { buildEvidenceFragments } from "./src/processing/evidence.mjs";
 import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
+import { collectZipVisualAssets } from "./src/processing/visual-assets.mjs";
+import { buildVisualContext } from "./src/processing/visual-context.mjs";
+import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
 import { getComponentState, installComponent, retryComponent } from "./src/runtime/components.mjs";
 import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
 import { DEFAULT_RUNTIME_MANIFEST } from "./src/runtime/semantic-manifest.mjs";
@@ -108,6 +114,8 @@ async function readDb() {
   db.feedback ??= [];
   db.audit ??= [];
   db.maintenance ??= null;
+  const normalizedSynonyms = normalizeSynonymCollection(db.synonyms);
+  if (JSON.stringify(normalizedSynonyms) !== JSON.stringify(db.synonyms)) { db.synonyms = normalizedSynonyms; await writeDb(db); }
   for (const doc of db.documents) { doc.name = normalizeFilename(doc.name); if (doc.originalName) doc.originalName = normalizeFilename(doc.originalName); else if (doc.name) doc.originalName = doc.name; }
   for (const job of db.jobs) job.name = normalizeFilename(job.name);
   if (!originalStorageMigrated) {
@@ -195,11 +203,13 @@ async function extractPdf(buffer, options = {}) {
   try {
     for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
       const page = await pdf.getPage(pageNo); const content = await page.getTextContent(); const nativeText = content.items.map((item) => item.str).join(" ").replace(/\s+/g, " ").trim();
+      const operatorList = await page.getOperatorList();
       const viewport = page.getViewport({ scale: 1.5 }); const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
       await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
       const { data: { text: ocrText } } = await worker.recognize(canvas.toBuffer("image/png"));
       const normalizedOcr = ocrText.replace(/\s+/g, " ").trim();
-      pages.push({ page: pageNo, text: [nativeText, normalizedOcr].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index).join(" "), nativeText, ocrText: normalizedOcr });
+      const visualAssets = hasPdfVisualContent(operatorList) ? [buildPdfVisualAsset({ page: pageNo, bytes: canvas.toBuffer("image/png"), ocrText: normalizedOcr })] : [];
+      pages.push({ page: pageNo, text: [nativeText, normalizedOcr].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index).join(" "), nativeText, ocrText: normalizedOcr, visualAssets });
       await options.onUnit?.(pageNo, pdf.numPages);
     }
   } finally { await worker.terminate(); }
@@ -234,6 +244,16 @@ async function extractZip(buffer, ext, options = {}) {
         }
         slideOcr.set(slidePath, parts.join(" "));
         slideAssets.set(slidePath, assets);
+      }
+    } finally { await worker.terminate(); }
+  }
+  if (["docx", "hwpx"].includes(ext)) {
+    const worker = await createLocalOcrWorker();
+    try {
+      const assets = await collectZipVisualAssets(zip, ext, { recognize: async (bytes) => (await worker.recognize(bytes)).data.text });
+      if (assets.length && paths[0]) {
+        slideAssets.set(paths[0], assets.map((asset) => ({ ...asset, text: asset.ocrText })));
+        slideOcr.set(paths[0], assets.map((asset) => asset.ocrText).filter(Boolean).join(" "));
       }
     } finally { await worker.terminate(); }
   }
@@ -277,7 +297,18 @@ async function extractHwp(buffer, options = {}) {
 async function extract(buffer, ext, options) {
   if (ext === "pdf") return extractPdf(buffer, options);
   if (["hwp", "hwpx"].includes(ext) && documentRenderer) {
-    try { return await documentRenderer.extract(buffer, options); } catch { /* Fall back to the native parser for damaged or unsupported files. */ }
+    const worker = await createVisualOcrWorker();
+    try {
+      const recognizeVisualAsset = async (bytes) => (await worker.recognize(bytes)).data.text;
+      const recognizeRenderedPage = async (svg) => {
+        const image = await loadImage(Buffer.from(svg));
+        const canvas = createCanvas(image.width, image.height);
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        return (await worker.recognize(canvas.toBuffer("image/png"))).data.text;
+      };
+      return await documentRenderer.extract(buffer, { ...options, recognizeVisualAsset, recognizeRenderedPage });
+    } catch { /* Fall back to the native parser for damaged or unsupported files. */ }
+    finally { await worker.terminate(); }
   }
   if (["pptx", "docx", "hwpx"].includes(ext)) return extractZip(buffer, ext, options);
   if (ext === "hwp") return extractHwp(buffer, options);
@@ -289,17 +320,36 @@ const embedding = (text, dimensions = 128) => {
   const length = Math.hypot(...vector) || 1; return vector.map((value) => Number((value / length).toFixed(6)));
 };
 const cosine = (left, right) => left.reduce((sum, value, index) => sum + value * right[index], 0);
-const makeUnits = (pages) => pages.filter((page) => page.text).flatMap((page) => {
-  const textUnit = { id: crypto.randomUUID(), range: page.page, text: page.nativeText || page.text, nativeText: page.nativeText || page.text, ocrText: page.ocrText || "", embedding: embedding(page.nativeText || page.text), evidenceType: "text" };
-  const visualUnits = (page.visualAssets || []).filter((asset) => asset.text).map((asset) => ({ id: crypto.randomUUID(), range: page.page, text: asset.text, nativeText: "", ocrText: asset.text, embedding: embedding(asset.text), evidenceType: "visual", visualAssetName: asset.name, visualMime: asset.mime }));
+const makeUnits = (pages) => pages.flatMap((page) => {
+  const textUnit = page.text ? { id: crypto.randomUUID(), range: page.page, text: page.nativeText || page.text, nativeText: page.nativeText || page.text, ocrText: page.ocrText || "", embedding: embedding(page.nativeText || page.text), evidenceType: "text" } : null;
+  const nearbyText = buildVisualContext(page);
+  const visualUnits = (page.visualAssets || []).filter((asset) => asset.text || asset.ocrText || asset.name).map((asset) => ({ id: crypto.randomUUID(), range: page.page, text: asset.text || asset.ocrText || "", nativeText: "", ocrText: asset.text || asset.ocrText || "", embedding: embedding(asset.text || asset.ocrText || ""), evidenceType: "visual", visualAssetName: asset.name, visualMime: asset.mime, visualNearbyText: nearbyText }));
   const tableUnits = (page.tableText || []).map((text) => ({ id: crypto.randomUUID(), range: page.page, text, nativeText: text, ocrText: "", embedding: embedding(text), evidenceType: "table" }));
-  return [textUnit, ...tableUnits, ...visualUnits];
+  return [textUnit, ...tableUnits, ...visualUnits].filter(Boolean);
 });
 const activeJobs = (db) => db.jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
 async function recoverInterruptedJobs() {
   const db = await readDb(); let changed = false;
   for (const job of db.jobs) {
     if (job.status === "processing") { job.status = "queued"; job.detail = "앱 종료 전 작업을 감지했습니다. 안전 지점부터 자동 재개합니다."; job.recoveredAt = new Date().toISOString(); changed = true; }
+  }
+  if (changed) await writeDb(db);
+}
+async function queueRendererUpgradeJobs() {
+  if (!rendererComponentVersion || !documentRenderer) return;
+  const db = await readDb();
+  const queued = new Set(db.jobs.filter((job) => ["queued", "processing", "paused"].includes(job.status) && job.documentId).map((job) => job.documentId));
+  let changed = false;
+  for (const doc of db.documents) {
+    const format = String(doc.format || "").toUpperCase();
+    if (!(format === "HWP" || format === "HWPX") || doc.rendererVersion === rendererComponentVersion || queued.has(doc.id)) continue;
+    const originalPath = resolveDocumentOriginalPath(dataDir, doc);
+    const localOriginal = originalPath && await hasVerifiedLocalOriginal(doc);
+    if (!localOriginal && !doc.cloudOriginalFile) continue;
+    db.jobs.unshift({ id: crypto.randomUUID(), kind: "reprocess", trigger: "renderer-upgrade", auto: true, rendererVersion: rendererComponentVersion, name: doc.name, mode: "lightweight", status: "queued", progress: 0, detail: `문서 렌더러 ${rendererComponentVersion} 적용을 위한 시각 근거 재처리 대기 중입니다.`, documentId: doc.id, createdAt: new Date().toISOString() });
+    doc.rendererStatus = "pending";
+    doc.visualAnalysisStatus = "pending";
+    changed = true;
   }
   if (changed) await writeDb(db);
 }
@@ -317,7 +367,7 @@ async function runQueue() {
           if (!pages.length) throw new Error("검색 가능한 텍스트를 추출하지 못했습니다.");
           const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (!freshJob || freshJob.status === "cancelled") { await fs.unlink(job.stagedPath).catch(() => {}); continue; }
           const originalName = normalizeOriginalName(job.name, `${job.hash}.${job.ext}`); const originalKey = `${job.hash}/${originalName}`; const originalPath = path.join(originalsDir, job.hash, originalName); await writeOriginalAtomically(originalPath, buffer); await fs.unlink(job.stagedPath).catch(() => {});
-          const pdfOcr = job.ext === "pdf"; const now = new Date().toISOString(); const units = makeUnits(pages); const metrics = buildPageMetrics(pages, units); const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; const format = job.ext.toUpperCase(); const doc = { id: crypto.randomUUID(), name: job.name, originalName, format, hash: job.hash, originalKey, size: job.size, registeredAt: now, modifiedAt: job.modifiedAt, updatedAt: now, processingMode: effectiveMode, requestedProcessingMode: job.mode, processingModeFallback: modeResolution.fallbackReason, advancedAnalysis: effectiveMode === "local-ai", semanticAnalysisStatus: effectiveMode === "local-ai" ? "pending" : "degraded", rendererStatus: rendererAvailableForFormat(format) ? "ready" : "fallback", ...metrics, sourceStatus: "local_available", nativeTextStatus: "success", ocrStatus: pdfOcr ? "success" : "unavailable", visualAnalysisStatus: "not_supported", units };
+          const pdfOcr = job.ext === "pdf"; const now = new Date().toISOString(); const units = makeUnits(pages); const metrics = buildPageMetrics(pages, units); const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; const format = job.ext.toUpperCase(); const doc = { id: crypto.randomUUID(), name: job.name, originalName, format, hash: job.hash, originalKey, size: job.size, registeredAt: now, modifiedAt: job.modifiedAt, updatedAt: now, processingMode: effectiveMode, requestedProcessingMode: job.mode, processingModeFallback: modeResolution.fallbackReason, advancedAnalysis: effectiveMode === "local-ai", semanticAnalysisStatus: effectiveMode === "local-ai" ? "pending" : "degraded", rendererStatus: rendererAvailableForFormat(format) ? "ready" : "fallback", rendererVersion: rendererAvailableForFormat(format) ? rendererComponentVersion : null, ...metrics, sourceStatus: "local_available", nativeTextStatus: "success", ocrStatus: pdfOcr ? "success" : "unavailable", visualAnalysisStatus: metrics.visualEvidenceCount ? "success" : rendererAvailableForFormat(format) ? "unavailable" : "not_supported", units };
           fresh.documents.push(doc); freshJob.documentId = doc.id; freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.processingModeFallback = modeResolution.fallbackReason; freshJob.detail = processingDetail(job.mode, "index"); delete freshJob.stagedPath; await writeDb(fresh); await syncDocumentToV2(doc);
           const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === doc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${metrics.pageCount}개 페이지 처리 완료${metrics.failedPageCount ? ` · ${metrics.failedPageCount}개 페이지 검색 불가` : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = now; indexed.audit.unshift({ id: crypto.randomUUID(), type: "registration", documentId: doc.id, createdAt: now, detail: indexedJob.detail }); await writeDb(indexed); }
         } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); if (error.status === "cancelled") { await fs.unlink(freshJob.stagedPath || job.stagedPath).catch(() => {}); delete freshJob.stagedPath; } await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
@@ -331,7 +381,7 @@ async function runQueue() {
         const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
         const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); const freshDoc = fresh.documents.find((item) => item.id === job.documentId);
         if (!freshJob || freshJob.status === "cancelled") continue;
-        const pdfOcr = freshDoc.format === "PDF"; const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; freshDoc.processingMode = effectiveMode; freshDoc.requestedProcessingMode = job.mode; freshDoc.processingModeFallback = modeResolution.fallbackReason; freshDoc.advancedAnalysis = effectiveMode === "local-ai"; freshDoc.semanticAnalysisStatus = "pending"; freshDoc.rendererStatus = rendererAvailableForFormat(freshDoc.format) ? "ready" : "fallback"; freshDoc.units = makeUnits(pages); Object.assign(freshDoc, buildPageMetrics(pages, freshDoc.units)); freshDoc.updatedAt = new Date().toISOString(); freshDoc.nativeTextStatus = "success"; freshDoc.ocrStatus = pdfOcr ? "success" : "unavailable";
+        const pdfOcr = freshDoc.format === "PDF"; const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; freshDoc.processingMode = effectiveMode; freshDoc.requestedProcessingMode = job.mode; freshDoc.processingModeFallback = modeResolution.fallbackReason; freshDoc.advancedAnalysis = effectiveMode === "local-ai"; freshDoc.semanticAnalysisStatus = "pending"; freshDoc.rendererStatus = rendererAvailableForFormat(freshDoc.format) ? "ready" : "fallback"; freshDoc.rendererVersion = rendererAvailableForFormat(freshDoc.format) ? rendererComponentVersion : null; freshDoc.units = makeUnits(pages); Object.assign(freshDoc, buildPageMetrics(pages, freshDoc.units)); freshDoc.updatedAt = new Date().toISOString(); freshDoc.nativeTextStatus = "success"; freshDoc.ocrStatus = pdfOcr ? "success" : "unavailable"; freshDoc.visualAnalysisStatus = freshDoc.visualEvidenceCount ? "success" : rendererAvailableForFormat(freshDoc.format) ? "unavailable" : "not_supported";
         freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.processingModeFallback = modeResolution.fallbackReason; freshJob.detail = processingDetail(job.mode, "index"); await writeDb(fresh); await syncDocumentToV2(freshDoc);
         const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === freshDoc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${indexedDoc.pageCount}개 페이지 재처리 완료${indexedDoc.failedPageCount ? ` · ${indexedDoc.failedPageCount}개 페이지 검색 불가` : ""}${pdfOcr ? " · OCR 완료" : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = new Date().toISOString(); indexed.audit.unshift({ id: crypto.randomUUID(), type: "reprocess", documentId: indexedDoc.id, createdAt: indexedJob.completedAt, detail: indexedJob.detail }); await writeDb(indexed); }
       } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
@@ -349,10 +399,12 @@ const decryptBackup = (raw, passphrase) => {
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "base64")), decipher.final()]).toString("utf8"));
 };
 const createLocalOcrWorker = () => createWorker("eng+kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
+const createVisualOcrWorker = () => createWorker(process.env.WEKI_VISUAL_OCR_LANG || "kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
 const tokens = (query) => query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [];
 function search(db, query) {
   const terms = tokens(query); const queryEmbedding = embedding(query);
   return db.documents.filter((doc) => ["completed", "partial"].includes(doc.processingStatus)).flatMap((doc) => doc.units.map((unit) => {
+    if (!matchesRouteConstraints(query, [unit.text, unit.nativeText, unit.ocrText, doc.name])) return null;
     const haystack = `${unit.text} ${doc.name}`.toLowerCase();
     const hits = terms.filter((term) => haystack.includes(term));
     const lexical = terms.length ? Math.round((hits.length / terms.length) * 70) : 0;
@@ -360,16 +412,13 @@ function search(db, query) {
     const frequency = hits.reduce((count, term) => count + (haystack.match(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))?.length || 0), 0);
     const locationPrefix = doc.format === "HWP" ? "섹션" : doc.format === "PPTX" ? "슬라이드" : "p.";
     const evidenceOrigin = unit.evidenceType === "visual" ? "ocr" : unit.evidenceType === "table" ? "native" : unit.nativeText && unit.ocrText ? "native+ocr" : unit.ocrText ? "ocr" : "native";
-    return { documentId: doc.id, fileName: doc.name, format: doc.format, sourceStatus: doc.sourceStatus, cloudOriginalFile: doc.cloudOriginalFile || null, matchedPage: unit.range, sourceRange: unit.range, locationPrefix, evidenceType: unit.evidenceType, evidenceOrigin, visualAssetName: unit.visualAssetName || null, text: unit.text.slice(0, 420), lexicalScore: lexical, semanticScore: semantic, score: Math.min(100, lexical + semantic + Math.min(15, frequency * 3)), lowRelevance: hits.length === 0, matchedTerms: hits };
-  })).filter((result) => (result.matchedTerms.length > 0 || result.semanticScore >= 12) && result.text.trim().length > 3).sort((a, b) => b.score - a.score || a.fileName.localeCompare(b.fileName)).slice(0, 30);
+    const score = Math.min(100, lexical + semantic + Math.min(15, frequency * 3));
+    const snippet = buildEvidenceSnippet(unit.text, query);
+    return { documentId: doc.id, fileName: doc.name, format: doc.format, sourceStatus: doc.sourceStatus, cloudOriginalFile: doc.cloudOriginalFile || null, matchedPage: unit.range, sourceRange: unit.range, locationPrefix, evidenceType: unit.evidenceType, evidenceOrigin, visualAssetName: unit.visualAssetName || null, text: unit.text.slice(0, 420), snippet: snippet.text, truncated: snippet.truncated, lexicalScore: lexical, semanticScore: semantic, score, displayScore: formatDisplayScore(score), lowRelevance: hits.length === 0, matchedTerms: snippet.matchedTerms };
+  })).filter((result) => result && (result.matchedTerms.length > 0 || result.semanticScore >= 12) && result.text.trim().length > 3).sort((a, b) => b.score - a.score || a.fileName.localeCompare(b.fileName)).slice(0, 30);
 }
 function expandQuery(db, query) {
-  const lower = query.toLowerCase(); const expansions = [];
-  for (const entry of db.synonyms.filter((item) => item.approved)) {
-    const forms = [entry.term, ...entry.aliases].map((item) => item.toLowerCase());
-    if (forms.some((form) => lower.includes(form))) expansions.push(...forms.filter((form) => form !== lower));
-  }
-  return { normalized: query.trim().replace(/\s+/g, " "), expansions: [...new Set(expansions)] };
+  return expandSynonymQuery(query, db.synonyms);
 }
 
 const mybox = createMyboxClient({ apiBase: process.env.WEKI_MYBOX_API_BASE || undefined });
@@ -539,17 +588,19 @@ async function removeManagedStore(rootDir) {
 
 const initialStoreCreated = await ensureStore();
 const databaseForIndex = await readDb();
-const v2Enabled = process.env.WEKI_SEARCH_V2 === "1";
-const v2Store = v2Enabled ? createSearchStore({ directory: v2DataDir }) : null;
-if (v2Store) {
-  for (const document of databaseForIndex.documents || []) v2Store.updateDocumentSource(document);
-}
+const v2Enabled = true;
+const v2Store = createSearchStore({ directory: v2DataDir });
+for (const document of databaseForIndex.documents || []) v2Store.updateDocumentSource(document);
+let legacyMigration = { status: "pending", total: databaseForIndex.documents?.length || 0, completed: 0, failed: 0, updatedAt: null };
 const runtimeComponentState = await getComponentState(runtimeRoot);
-const rendererComponentPath = runtimeComponentState.components?.["document-renderer"]?.status === "ready" ? runtimeComponentState.components["document-renderer"].path : null;
+const configuredRenderer = runtimeComponentState.components?.["document-renderer"] || null;
+const rendererComponentPath = configuredRenderer?.status === "ready" ? configuredRenderer.path : null;
 const documentRenderer = rendererComponentPath ? await createDocumentRenderer({ componentPath: rendererComponentPath }).catch(() => null) : null;
+const rendererSource = configuredRenderer?.status === "ready" ? "runtime" : documentRenderer ? "bundled" : null;
+const rendererComponentVersion = configuredRenderer?.version || null;
 const rendererAvailableForFormat = (format) => Boolean(documentRenderer) && ["HWP", "HWPX"].includes(String(format || "").toUpperCase());
 const semanticModelPath = runtimeComponentState.components?.["semantic-model"]?.status === "ready" ? runtimeComponentState.components["semantic-model"].path : null;
-const embeddingProvider = v2Enabled && semanticModelPath ? await createRuntimeEmbeddingProvider({ componentPath: semanticModelPath }) : null;
+const embeddingProvider = semanticModelPath ? await createRuntimeEmbeddingProvider({ componentPath: semanticModelPath }) : null;
 const annIndex = v2Store ? createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 }) : null;
 if (v2Store) v2Store.setIndexState({ name: "model", generation: semanticModelPath || "none", revision: Date.now(), status: embeddingProvider?.available ? "ready" : semanticModelPath ? "degraded" : "unavailable" });
 if (v2Store && annIndex && embeddingProvider?.available) {
@@ -562,23 +613,50 @@ const semanticEngine = v2Store ? createSemanticEngine({ store: v2Store, annIndex
 const v2Search = v2Store ? createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine) }) : null;
 async function syncDocumentToV2(document) {
   if (!v2Store || !document?.id) return;
-  v2Store.deleteDocument(document.id);
-  v2Store.upsertDocument({ id: document.id, name: document.name, format: String(document.format || "").toLowerCase(), createdAt: document.registeredAt, modifiedAt: document.modifiedAt, sourceHash: document.hash, sourceStatus: document.sourceStatus, cloudOriginalFile: document.cloudOriginalFile || null });
+  const entries = [];
   for (const unit of document.units || []) {
-    const fragments = buildEvidenceFragments({ documentId: document.id, page: unit.range, nativeText: unit.evidenceType === "text" ? (unit.nativeText || unit.text) : "", ocrText: unit.evidenceType === "text" ? unit.ocrText : "", table: unit.evidenceType === "table" ? { headers: [], rows: [[unit.text]] } : null, visualAssets: unit.visualAssetName ? [{ name: unit.visualAssetName, mime: unit.visualMime, ocrText: unit.text }] : [], maxTokens: 384, overlapTokens: 64 });
+      const fragments = buildEvidenceFragments({ documentId: document.id, page: unit.range, nativeText: unit.evidenceType === "text" ? (unit.nativeText || unit.text) : "", ocrText: unit.evidenceType === "text" ? unit.ocrText : "", table: unit.evidenceType === "table" ? { headers: [], rows: [[unit.text]] } : null, visualAssets: unit.visualAssetName ? [{ name: unit.visualAssetName, mime: unit.visualMime, ocrText: unit.ocrText }] : [], maxTokens: 384, overlapTokens: 64 });
     for (const fragment of fragments) {
-      v2Store.upsertEvidenceFragment({ id: fragment.id, documentId: document.id, pageStart: fragment.pageStart, pageEnd: fragment.pageEnd, type: fragment.type, origin: fragment.origin, assetName: fragment.assetName || null, context: fragment.context });
       const indexedUnitId = `${unit.id}:${fragment.id}`;
-      v2Store.upsertKnowledgeUnit({ id: indexedUnitId, documentId: document.id, title: document.name, heading: unit.heading || "", text: fragment.context || "", nativeText: unit.nativeText || "", ocrText: unit.ocrText || "", sourceRange: unit.range, evidenceIds: [fragment.id] });
+      let vector = null;
       if (embeddingProvider?.available) {
-        try { const vector = await embeddingProvider.embed(`${document.name} ${unit.heading || ""} ${fragment.context || ""}`, "passage"); v2Store.upsertEmbedding({ unitId: indexedUnitId, vector, dimension: vector.length, model: "multilingual-e5-small", generation: String(document.updatedAt || document.registeredAt || "active") }); } catch { /* Semantic indexing remains optional; lexical indexing is authoritative. */ }
+        try { vector = await embeddingProvider.embed(`${document.name} ${unit.heading || ""} ${fragment.context || ""}`, "passage"); } catch { /* Semantic indexing remains optional; lexical indexing is authoritative. */ }
       }
+      entries.push({
+        evidence: { id: fragment.id, documentId: document.id, pageStart: fragment.pageStart, pageEnd: fragment.pageEnd, type: fragment.type, origin: fragment.origin, assetName: fragment.assetName || null, context: fragment.context },
+        unit: { id: indexedUnitId, documentId: document.id, title: document.name, heading: unit.heading || "", text: fragment.context || "", nativeText: unit.nativeText || "", ocrText: unit.ocrText || "", sourceRange: unit.range, evidenceIds: [fragment.id] },
+        embedding: vector ? { vector, dimension: vector.length, model: "multilingual-e5-small", generation: String(document.updatedAt || document.registeredAt || "active") } : null,
+      });
     }
   }
+  v2Store.replaceDocumentIndex({ document: { id: document.id, name: document.name, format: String(document.format || "").toLowerCase(), createdAt: document.registeredAt, modifiedAt: document.modifiedAt, sourceHash: document.hash, sourceStatus: document.sourceStatus, cloudOriginalFile: document.cloudOriginalFile || null }, entries });
   if (embeddingProvider?.available && annIndex) {
     try { const generation = await annIndex.build(v2Store.listEmbeddings({ dimension: 384 })); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later rebuild can recover a failed ANN generation. */ }
   }
   v2Store.setIndexState({ name: "fts", generation: String(document.updatedAt || document.registeredAt || Date.now()), revision: Date.now(), status: "ready" });
+}
+function sourceDatabaseGeneration(documents) {
+  return crypto.createHash("sha256").update(JSON.stringify((documents || []).map((document) => ({
+    id: document.id,
+    hash: document.hash,
+    updatedAt: document.updatedAt,
+    registeredAt: document.registeredAt,
+    units: (document.units || []).map((unit) => ({ id: unit.id, range: unit.range, text: unit.text, nativeText: unit.nativeText, ocrText: unit.ocrText, evidenceType: unit.evidenceType, visualAssetName: unit.visualAssetName })),
+  })))).digest("hex");
+}
+const sourceGeneration = sourceDatabaseGeneration(databaseForIndex.documents || []);
+const storedSourceMigration = v2Store.getIndexState("source-migration");
+if (storedSourceMigration?.generation === sourceGeneration && storedSourceMigration.status === "ready") {
+  legacyMigration = { ...legacyMigration, status: "ready", completed: legacyMigration.total, updatedAt: storedSourceMigration.updated_at };
+} else {
+  v2Store.setIndexState({ name: "source-migration", generation: sourceGeneration, revision: Date.now(), status: "pending" });
+  for (const document of databaseForIndex.documents || []) {
+    try { await syncDocumentToV2(document); legacyMigration.completed += 1; }
+    catch { legacyMigration.failed += 1; }
+  }
+  legacyMigration.status = legacyMigration.failed ? "failed" : "ready";
+  legacyMigration.updatedAt = new Date().toISOString();
+  v2Store.setIndexState({ name: "source-migration", generation: sourceGeneration, revision: Date.now(), status: legacyMigration.status });
 }
 const optionalRuntimeComponents = ["semantic-model", "document-renderer"];
 async function runtimeStatus() {
@@ -592,14 +670,18 @@ async function runtimeStatus() {
   const components = {};
   for (const id of knownIds) {
     const current = state.components?.[id];
+    let applied = false;
     if (current) {
       let status = current.status;
       if (status === "ready" && current.path) {
         try { const stat = await fs.stat(current.path); if (!stat.isDirectory()) status = "missing"; } catch { status = "missing"; }
       }
-      components[id] = { ...current, status, installable: Boolean(installable[id]), reason: status === "missing" && !installable[id] ? "runtime_pack_not_configured" : current.reason || null };
+      applied = status === "ready" && (id === "document-renderer" ? Boolean(documentRenderer) : id === "semantic-model" ? Boolean(embeddingProvider?.available) : true);
+      components[id] = { ...current, status, applied, installable: Boolean(installable[id]), reason: status === "missing" && !installable[id] ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
     } else {
-      components[id] = { id, status: "missing", version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(installable[id]), reason: installable[id] ? null : "runtime_pack_not_configured" };
+      components[id] = id === "document-renderer" && documentRenderer
+        ? { id, status: "ready", applied: true, source: rendererSource, version: rendererComponentVersion, progress: 100, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: false, reason: null }
+        : { id, status: "missing", applied: false, version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(installable[id]), reason: installable[id] ? null : "runtime_pack_not_configured" };
     }
   }
   return { rootDirectory: runtimeRoot, manifestVersion: manifest?.version || null, manifestUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, installable, components };
@@ -618,9 +700,9 @@ app.get("/api/status", async (_req, res) => {
     dataDirectory: dataDir,
     maintenance: db.maintenance ?? null,
     engines: { lexical: "healthy", evidence: "healthy" },
-    search: v2Store ? { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health() } : { sqlite: "disabled", fts: "disabled", ann: "disabled", model: "disabled", indexGeneration: null },
+    search: { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health(), migration: legacyMigration },
     runtime: await runtimeStatus(),
-    searchVersion: v2Enabled ? "v2" : "v1",
+    searchVersion: "v2",
     rankingVersion: RANKING_VERSION,
   });
 });
@@ -659,18 +741,35 @@ const documentMetrics = (db, doc) => {
     indexedUnitCount: doc.indexedUnitCount ?? (doc.units || []).length,
     failedPageCount,
     processingStatus: failedPageCount > 0 ? "partial" : doc.processingStatus,
+    visualEvidenceCount: doc.visualEvidenceCount ?? (doc.units || []).filter((unit) => unit.evidenceType === "visual").length,
+    ocrPageCount: doc.ocrPageCount ?? (doc.units || []).filter((unit) => unit.ocrText).length,
   };
 };
-const publicDocument = (db, doc) => { const metrics = documentMetrics(db, doc); return { ...doc, ...metrics, pages: metrics.pageCount, units: undefined }; };
+const publicDocument = (db, doc) => { const metrics = documentMetrics(db, doc); return { ...doc, ...metrics, ocrStatus: metrics.ocrPageCount > 0 ? "success" : doc.ocrStatus, visualAnalysisStatus: metrics.visualEvidenceCount > 0 ? "success" : doc.visualAnalysisStatus === "not_supported" ? "unavailable" : doc.visualAnalysisStatus, pages: metrics.pageCount, units: undefined }; };
 app.get("/api/jobs", async (_req, res) => { const db = await readDb(); res.json({ jobs: visibleJobs(db.jobs) }); });
 app.get("/api/audit", async (_req, res) => { const db = await readDb(); res.json({ entries: db.audit.slice(0, 40) }); });
-app.post("/api/search", async (req, res) => { const db = await readDb(); const query = expandQuery(db, req.body.query || ""); res.json({ query: query.normalized, expansions: query.expansions, results: search(db, [query.normalized, ...query.expansions].join(" ")) }); });
+app.post("/api/search", async (_req, res) => { res.status(410).json({ code: "legacy_search_removed", message: "기존 검색 엔진은 종료되었습니다. /api/v2/search를 사용하세요." }); });
 app.post("/api/v2/search", async (req, res) => {
-  if (process.env.WEKI_SEARCH_V2 !== "1") return res.status(404).json({ error: "v2 검색이 비활성화되어 있습니다." });
-  try { res.json(await v2Search.search(req.body || {})); } catch (error) { res.status(500).json({ error: "v2 검색에 실패했습니다.", detail: error.message }); }
+  try {
+    const body = req.body || {};
+    const db = await readDb();
+    const expansion = expandQuery(db, body.query || "");
+    const queries = [expansion.normalized, ...(expansion.queries || [])].filter(Boolean);
+    const responses = await Promise.all(queries.map((query) => v2Search.search({ ...body, query })));
+    const result = responses[0] || await v2Search.search({ ...body, query: expansion.normalized });
+    const merged = new Map();
+    for (const response of responses) for (const row of response.results || []) {
+      const key = row.unitId || row.resultId;
+      const existing = merged.get(key);
+      if (!existing || Number(row.displayScore || 0) > Number(existing.displayScore || 0)) merged.set(key, row);
+    }
+    result.results = [...merged.values()].sort((left, right) => Number(right.displayScore || 0) - Number(left.displayScore || 0) || String(left.unitId).localeCompare(String(right.unitId))).map((row, index) => ({ ...row, rank: index + 1 }));
+    result.hasMore = responses.some((response) => response.hasMore);
+    const selectedQuery = expansion.normalized;
+    res.json({ ...result, query: expansion.normalized, searchQuery: selectedQuery, expansions: expansion.expansions });
+  } catch (error) { res.status(500).json({ error: "v2 검색에 실패했습니다.", detail: error.message }); }
 });
 app.post("/api/v2/feedback", async (req, res) => {
-  if (process.env.WEKI_SEARCH_V2 !== "1") return res.status(404).json({ error: "v2 검색이 비활성화되어 있습니다." });
   const body = req.body || {};
   if (!body.sessionId || !body.resultId || !body.unitId || !body.rankingVersion || typeof body.helpful !== "boolean") return res.status(400).json({ error: "sessionId, resultId, unitId, rank, rankingVersion, helpful이 필요합니다." });
   try { v2Store.recordFeedback(body); res.status(201).json({ stored: true }); } catch (error) { res.status(400).json({ error: "피드백을 저장할 수 없습니다.", detail: error.message }); }
@@ -736,10 +835,33 @@ app.post("/api/runtime/components/:id/retry", async (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
 });
 app.get("/api/synonyms", async (_req, res) => { const db = await readDb(); res.json({ entries: db.synonyms }); });
+app.get("/api/synonyms/suggestions", async (_req, res) => { const db = await readDb(); res.json({ suggestions: suggestSynonymCandidates({ feedback: db.feedback, documents: db.documents, existing: db.synonyms }) }); });
+app.post("/api/synonyms/suggestions", async (req, res) => {
+  const validation = validateSynonymInput({ term: req.body?.term, aliases: req.body?.aliases || [] });
+  if (!validation.valid) return res.status(400).json({ error: validation.errors.join(" "), errors: validation.errors });
+  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." });
+  const now = new Date().toISOString(); const entry = normalizeSynonymEntry({ term: validation.term, aliases: validation.aliases, status: "draft", source: "suggested" }, { id: crypto.randomUUID() }); entry.createdAt = now; entry.updatedAt = now; db.synonyms.unshift(entry); await writeDb(db); res.status(201).json({ entry });
+});
 app.post("/api/synonyms", async (req, res) => {
-  const term = String(req.body?.term || "").trim(); const aliases = [...new Set((req.body?.aliases || []).map((value) => String(value).trim()).filter(Boolean))];
-  if (!term || !aliases.length) return res.status(400).json({ error: "기준어와 하나 이상의 동의어·약어가 필요합니다." });
-  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." }); const entry = { id: crypto.randomUUID(), term, aliases, approved: true, source: "user", createdAt: new Date().toISOString() }; db.synonyms.unshift(entry); db.audit.unshift({ id: crypto.randomUUID(), type: "synonym", detail: `${term} synonym added`, createdAt: entry.createdAt }); await writeDb(db); res.status(201).json({ entry });
+  const validation = validateSynonymInput({ term: req.body?.term, aliases: req.body?.aliases || [] });
+  if (!validation.valid) return res.status(400).json({ error: validation.errors.join(" "), errors: validation.errors });
+  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." });
+  if (db.synonyms.some((item) => item.term === validation.term && (item.status || (item.approved ? "approved" : "draft")) === "approved")) return res.status(409).json({ error: "같은 기준어의 동의어가 이미 등록되어 있습니다." });
+  const now = new Date().toISOString(); const entry = normalizeSynonymEntry({ term: validation.term, aliases: validation.aliases, status: "approved", source: "manual" }, { id: crypto.randomUUID() }); entry.createdAt = now; entry.updatedAt = now;
+  db.synonyms.unshift(entry); db.audit.unshift({ id: crypto.randomUUID(), type: "synonym", detail: `${entry.term} synonym added`, createdAt: now }); await writeDb(db); res.status(201).json({ entry });
+});
+app.put("/api/synonyms/:id", async (req, res) => {
+  const validation = validateSynonymInput({ term: req.body?.term, aliases: req.body?.aliases || [] });
+  if (!validation.valid) return res.status(400).json({ error: validation.errors.join(" "), errors: validation.errors });
+  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." });
+  const entry = db.synonyms.find((item) => item.id === req.params.id); if (!entry) return res.status(404).json({ error: "동의어 항목을 찾을 수 없습니다." });
+  if (db.synonyms.some((item) => item.id !== entry.id && item.term === validation.term && (item.status || (item.approved ? "approved" : "draft")) === "approved")) return res.status(409).json({ error: "같은 기준어의 동의어가 이미 등록되어 있습니다." });
+  entry.term = validation.term; entry.aliases = validation.aliases; entry.updatedAt = new Date().toISOString(); db.audit.unshift({ id: crypto.randomUUID(), type: "synonym", detail: `${entry.term} synonym updated`, createdAt: entry.updatedAt }); await writeDb(db); res.json({ entry });
+});
+app.post("/api/synonyms/:id/decision", async (req, res) => {
+  const status = req.body?.status; if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: "approved 또는 rejected 상태가 필요합니다." });
+  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." }); const entry = db.synonyms.find((item) => item.id === req.params.id); if (!entry) return res.status(404).json({ error: "동의어 항목을 찾을 수 없습니다." });
+  entry.status = status; entry.approved = status === "approved"; entry.updatedAt = new Date().toISOString(); db.audit.unshift({ id: crypto.randomUUID(), type: "synonym", detail: `${entry.term} synonym ${status}`, createdAt: entry.updatedAt }); await writeDb(db); res.json({ entry });
 });
 app.delete("/api/synonyms/:id", async (req, res) => {
   const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 동의어를 변경할 수 없습니다." }); const before = db.synonyms.length;
@@ -881,8 +1003,17 @@ app.get("/api/documents/:id/original", async (req, res) => {
 });
 app.get("/api/documents/:id/visual/:name", async (req, res) => {
   const db = await readDb(); const doc = db.documents.find((item) => item.id === req.params.id); const name = path.basename(req.params.name);
-  if (!doc || doc.format !== "PPTX" || !doc.units.some((unit) => unit.visualAssetName === name)) return res.status(404).end();
-  try { const originalPath = await ensureDocumentOriginal(doc); const zip = await JSZip.loadAsync(await fs.readFile(originalPath)); const asset = zip.file(`ppt/media/${name}`); if (!asset) return res.status(404).end(); const mime = name.match(/\.png$/i) ? "image/png" : name.match(/\.webp$/i) ? "image/webp" : "image/jpeg"; res.type(mime).send(await asset.async("nodebuffer")); } catch { res.status(422).end(); }
+  if (!doc || !doc.units.some((unit) => unit.visualAssetName === name)) return res.status(404).end();
+  try {
+    const originalPath = await ensureDocumentOriginal(doc); const buffer = await fs.readFile(originalPath);
+    if (/^page-\d+\.svg$/i.test(name) && documentRenderer && ["HWP", "HWPX"].includes(doc.format)) {
+      const pageNumber = Number(name.match(/\d+/)[0]); const page = (await documentRenderer.extract(buffer))[pageNumber - 1]; if (!page?.renderedSvg) return res.status(404).end(); return res.type("image/svg+xml").send(page.renderedSvg);
+    }
+    if (/^page-\d+\.png$/i.test(name) && doc.format === "PDF") {
+      const pageNumber = Number(name.match(/\d+/)[0]); return res.type("image/png").send(await renderPdfPagePng(buffer, pageNumber));
+    }
+    const zip = await JSZip.loadAsync(buffer); const prefixes = doc.format === "PPTX" ? ["ppt/media/"] : doc.format === "DOCX" ? ["word/media/"] : ["bindata/", "contents/"]; const assetPath = Object.keys(zip.files).find((item) => prefixes.some((prefix) => item.toLowerCase().startsWith(prefix)) && path.basename(item) === name); const asset = assetPath ? zip.file(assetPath) : null; if (!asset) return res.status(404).end(); const mime = name.match(/\.png$/i) ? "image/png" : name.match(/\.webp$/i) ? "image/webp" : name.match(/\.svg$/i) ? "image/svg+xml" : "image/jpeg"; res.type(mime).send(await asset.async("nodebuffer"));
+  } catch { res.status(422).end(); }
 });
 app.delete("/api/data", async (req, res) => {
   const db = await readDb(); if (activeJobs(db).length || db.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
@@ -901,6 +1032,7 @@ app.delete("/api/documents/:id", async (req, res) => {
 const vite = await createViteServer({ root, server: { middlewareMode: true } });
 app.use(vite.middlewares);
 await recoverInterruptedJobs();
+await queueRendererUpgradeJobs();
 const port = Number(process.env.WEKI_PORT || 5173);
 function closeRuntimeStores() { try { v2Store?.close(); } catch { /* Shutdown should not mask the original signal. */ } }
 process.once("beforeExit", closeRuntimeStores);

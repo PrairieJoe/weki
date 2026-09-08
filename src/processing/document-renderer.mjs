@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { extractRenderedSvgVisualAssets } from "./visual-assets.mjs";
 
 const decodeResult = (value) => {
   if (typeof value !== "string") return String(value ?? "");
@@ -18,13 +19,30 @@ export async function createDocumentRenderer({ componentPath }) {
     async extract(buffer, options = {}) {
       const document = new renderer.HwpDocument(new Uint8Array(buffer));
       try {
-        const pageCount = document.pageCount();
-        const pages = [];
-        for (let index = 0; index < pageCount; index += 1) {
-          const text = String(decodeResult(document.getPageText(index)) || "").replace(/\s+/g, " ").trim();
-          let renderedSvg = "";
-          try { renderedSvg = String(document.renderPageSvg(index) || ""); } catch { /* A text-only page remains searchable. */ }
-          pages.push({ page: index + 1, text, nativeText: text, ocrText: "", renderedSvg, rendererStatus: "document-renderer" });
+      const pageCount = document.pageCount();
+      const pages = [];
+      for (let index = 0; index < pageCount; index += 1) {
+        const text = String(decodeResult(document.getPageText(index)) || "").replace(/\s+/g, " ").trim();
+        let renderedSvg = "";
+        try { renderedSvg = String(document.renderPageSvg(index) || ""); } catch { /* A text-only page remains searchable. */ }
+        const embeddedAssets = extractRenderedSvgVisualAssets(renderedSvg, { page: index + 1 });
+          const visualOcr = [];
+          if (typeof options.recognizeVisualAsset === "function") {
+            for (const asset of embeddedAssets) {
+              try {
+                const ocrText = String(await options.recognizeVisualAsset(asset.bytes, asset) || "").replace(/\s+/g, " ").trim();
+                if (ocrText) visualOcr.push(ocrText);
+              } catch { /* A damaged image remains a visual asset without searchable OCR. */ }
+            }
+          }
+          let ocrText = visualOcr.join(" ");
+          if (renderedSvg && !embeddedAssets.length && !text && typeof options.recognizeRenderedPage === "function") {
+            try {
+              const renderedOcrText = String(await options.recognizeRenderedPage(renderedSvg) || "").replace(/\s+/g, " ").trim();
+              ocrText = [ocrText, renderedOcrText].filter(Boolean).filter((value, valueIndex, list) => list.indexOf(value) === valueIndex).join(" ");
+            } catch { /* Native page text remains searchable when rendered OCR is unavailable. */ }
+          }
+          pages.push({ page: index + 1, text: [text, ocrText].filter(Boolean).filter((value, valueIndex, list) => list.indexOf(value) === valueIndex).join(" "), nativeText: text, ocrText, renderedSvg, rendererStatus: "document-renderer", visualAssets: (embeddedAssets.length || ocrText) && renderedSvg ? [{ name: `page-${index + 1}.svg`, mime: "image/svg+xml", ocrText, text: ocrText, source: "rendered-page", embeddedAssets: embeddedAssets.map(({ bytes: _bytes, ...asset }) => asset) }] : [] });
           await options.onUnit?.(index + 1, pageCount);
         }
         if (!pages.length) throw new Error("renderer returned no physical pages");

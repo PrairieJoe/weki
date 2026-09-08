@@ -29,6 +29,22 @@ test("Weki search has a persistent composer and accessible navigation", () => {
   assert.match(main, /role="search"/);
 });
 
+test("Weki search presents bounded highlighted evidence and integer relevance", () => {
+  assert.match(main, /data-evidence-expand/);
+  assert.match(main, /highlightEvidence/);
+  assert.match(main, /formatDisplayScore/);
+  assert.match(main, /aria-label=.*연관성/);
+  assert.match(styles, /\.evidence-text mark/);
+});
+
+test("Weki exposes managed and suggested synonym states", () => {
+  assert.match(server, /status: "approved"/);
+  assert.match(server, /source: "manual"/);
+  assert.match(main, /승인 대기/);
+  assert.match(main, /data-approve-synonym/);
+  assert.match(main, /data-reject-synonym/);
+});
+
 test("Weki exposes a managed destructive-operation dialog", () => {
   assert.match(main, /role="dialog"/);
   assert.match(main, /aria-modal="true"/);
@@ -50,6 +66,13 @@ test("Weki starts without requiring a working GPU process", () => {
 
 test("Weki keeps the Vite server runtime dependency in production dependencies", () => {
   assert.equal(typeof packageJson.dependencies?.vite, "string");
+});
+
+test("Weki keeps the document renderer out of the production package", () => {
+  assert.equal(packageJson.dependencies?.["@rhwp/core"], undefined);
+  assert.equal(packageJson.devDependencies?.["@rhwp/core"], "0.8.4");
+  assert.doesNotMatch(server, /bundledRendererPath/);
+  assert.ok(packageJson.build?.files?.includes("!node_modules/@rhwp/**"));
 });
 
 test("Weki uses a writable user-data directory when packaged", () => {
@@ -136,6 +159,17 @@ test("Weki records a deterministic storage pointer for silent installs", () => {
   assert.match(installer, /\$APPDATA\\Weki/);
 });
 
+test("Weki uninstaller stops running app processes before removing files", () => {
+  const uninstallStart = installer.indexOf("!macro customUnInstall");
+  const uninstall = installer.slice(uninstallStart);
+  const stopProcesses = uninstall.indexOf("taskkill.exe");
+  const cleanup = uninstall.indexOf("ReadRegStr $WekiRootCount");
+  assert.ok(uninstallStart >= 0);
+  assert.ok(stopProcesses >= 0);
+  assert.ok(stopProcesses < cleanup);
+  assert.match(uninstall, /taskkill\.exe.*\/F \/T \/IM "\$\{APP_EXECUTABLE_FILENAME\}"/);
+});
+
 test("Weki accepts a MYBOX token in the installer and stores it outside the package", () => {
   const resources = packageJson.build?.extraResources || [];
   assert.equal(resources.some((item) => typeof item === "object" && item.from === ".env"), false);
@@ -174,6 +208,15 @@ test("Weki exposes local MYBOX credential actions without returning the token to
   assert.match(main, /id="save-mybox-token"/);
   assert.match(main, /id="clear-mybox-token"/);
   assert.match(main, /wekiCredentials/);
+});
+
+test("Weki keeps semantic runtime installation visible and updates MYBOX credentials without a full render", () => {
+  assert.match(main, /const installControls=installButtons/);
+  assert.match(main, /\$\{installControls\}/);
+  assert.match(main, /applyMyboxCredentialResult/);
+  assert.match(main, /서버를 재연결하는 중/);
+  assert.doesNotMatch(main, /const result=await bridge\.saveToken\(input\.value\); input\.value=""; state\.toast=.*await refresh\(\); render\(\);/);
+  assert.doesNotMatch(main, /const result=await bridge\.clearToken\(\); state\.toast=.*await refresh\(\); render\(\);/);
 });
 
 test("Weki applies the supplied icon across the packaged app and UI", async () => {
@@ -268,7 +311,8 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(server, /baseUrl = `mybox:\/\/runtime/);
   assert.doesNotMatch(server, /for \(const file of component\.files\) file\.url/);
   assert.match(server, /restartRequired: \["semantic-model", "document-renderer"\]\.includes\(component\.id\)/);
-  assert.match(main, /install-mybox-renderer/);
+  assert.match(main, /document-renderer-install-slot/);
+  assert.doesNotMatch(main, /id="install-mybox-renderer"/);
   assert.match(server, /runtimeComponents/);
   assert.match(main, /runtime\.runtimeComponents/);
   assert.match(main, /myboxRuntimePromise/);

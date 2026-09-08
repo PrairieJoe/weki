@@ -194,5 +194,5 @@ export function buildPageMetrics(pages, units) {
   const pageCount = sourcePages.length;
   const searchablePageCount = searchablePages.size;
   const failedPageCount = Math.max(0, pageCount - searchablePageCount);
-  return { pageCount, searchablePageCount, indexedUnitCount: indexedUnits.length, failedPageCount, processingStatus: failedPageCount ? "partial" : "completed" };
+  return { pageCount, searchablePageCount, indexedUnitCount: indexedUnits.length, failedPageCount, processingStatus: failedPageCount ? "partial" : "completed", visualEvidenceCount: indexedUnits.filter((unit) => unit.evidenceType === "visual").length, ocrPageCount: sourcePages.filter((page) => page.ocrText || (page.visualAssets || []).some((asset) => asset.ocrText || asset.text)).length };
 }

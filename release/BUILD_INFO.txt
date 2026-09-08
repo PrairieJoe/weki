@@ -1,12 +1,14 @@
-Source commit: 2f7edf624af0a77015c3e526dc46318b699600cd
-Build date/time: 2026-09-08 09:15:00 +09:00
+Source commit: pending-final-release-commit
+Build date/time: 2026-09-08 22:30:36 +09:00
 Application version: 1.1.0
 Installer file name: Weki-1.1.0-Setup.exe
+Installer size: 232086352 bytes
 Installer path (external archive): GitHub Release v1.1.0
-Installer SHA-256: 670607983955037CA88F460F9EC820DACCA7A1857A62AAD7AE421104B915CE7C
-Installer SHA-512: nMFT4PVIff2j9O6Dxrhiik2R/Bk/kbt8kuCPwwkozaQRk52MkeHAt5wZD4lWERn5RHox6cshgtRrpG4HCco8KA==
-npm test: PASS (90 passed, 0 failed)
+Installer SHA-256: 25DD37A62609CAD9525EA129F65A3A9C63681DB41D78C6E58E91C64D3F887216
+Installer SHA-512: FCA56B85FD294B862CF5D00520CD7FFB545F1B51BFE9B77561F159B6ADDFCD0060F994E4FFE03549AE7947342ACEE0DC4E0EE32CDA469CAE1894EBFDCE782F1A
+npm test: PASS (140 passed, 0 failed, 1 skipped)
+npm run test:e2e: SKIPPED (1 environment-gated test)
 npm run build: PASS
 electron-builder --win nsis: PASS
-Packaging check: PASS (packaged version 1.1.0; app.asar and entrypoints present)
+Packaging check: PASS (packaged version 1.1.0; app.asar, renderer output and entrypoints present)
 Release status: FINAL 1.1.0

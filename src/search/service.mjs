@@ -2,11 +2,17 @@ import { performance } from "node:perf_hooks";
 import crypto from "node:crypto";
 import {
   decodeCursor,
+  collapseEvidenceDuplicates,
   diversifyResults,
+  evidenceMatchPriority,
+  evidenceProximityScore,
+  filterDirectEvidenceResults,
+  filterRouteConstrainedResults,
   normalizeSearchRequest,
   reciprocalRankFusion,
   selectEvidence,
 } from "./retrieval.mjs";
+import { buildEvidenceSnippet, formatDisplayScore } from "./evidence-display.mjs";
 
 export const RANKING_VERSION = "v2-lexical-rrf60";
 
@@ -32,7 +38,7 @@ export function createSearchService({ store, semanticSearch = null, pageSize = 5
         const semanticStarted = now();
         try { semantic = (await semanticSearch(request.query, { limit: 200, filters: request.filters })) || []; } catch { semantic = []; }
         timings.semanticMs = now() - semanticStarted;
-        if (semantic.length) rankings.push(semantic.map((row) => ({ ...row, engine: "ann" })));
+        if (semantic.length) rankings.push(filterRouteConstrainedResults(semantic, request.query).map((row) => ({ ...row, engine: "ann" })));
       }
       const fusedStarted = now();
       const fused = reciprocalRankFusion(rankings, { k: 60 }).slice(0, 200);
@@ -47,17 +53,23 @@ export function createSearchService({ store, semanticSearch = null, pageSize = 5
         if (!unit) return null;
         return { ...unit, id: unitId, score: row.score / scoreScale, evidence: unit.evidence || [] };
       }).filter(Boolean);
+      const directMaterialized = collapseEvidenceDuplicates(filterDirectEvidenceResults(materialized, request.query), request.query)
+        .sort((left, right) => evidenceProximityScore(right, request.query) - evidenceProximityScore(left, request.query) || evidenceMatchPriority(right, request.query) - evidenceMatchPriority(left, request.query) || right.score - left.score || String(left.unitId).localeCompare(String(right.unitId)));
       const offset = decodeCursor(request.cursor);
-      const window = materialized.slice(offset, offset + pageSize + 1);
+      const window = directMaterialized.slice(offset, offset + pageSize + 1);
       const hasMore = window.length > pageSize;
-      const page = selectEvidence(window.slice(0, pageSize), { limit: pageSize, maxPerDocument: 2 });
+      const page = selectEvidence(window.slice(0, pageSize), { limit: pageSize, maxPerDocument: 2, query: request.query });
       const results = page.map((row, index) => ({
         resultId: resultIdFor(row.unitId),
         documentId: row.documentId,
         unitId: row.unitId,
-        matchedEvidence: row.matchedEvidence,
+        matchedEvidence: row.matchedEvidence ? (() => {
+          const snippet = buildEvidenceSnippet(row.matchedEvidence.context, request.query);
+          return { ...row.matchedEvidence, snippet: snippet.text, matchedTerms: snippet.matchedTerms, truncated: snippet.truncated };
+        })() : null,
         sourceRange: row.sourceRange,
         relevanceScore: row.score,
+        displayScore: formatDisplayScore(row.score),
         lowRelevance: row.lowRelevance,
         rank: offset + index + 1,
         title: row.title,

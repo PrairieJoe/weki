@@ -1,7 +1,8 @@
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+import { compactKoreanSpacing, containsExactRouteCode, extractRouteCodes, extractSearchTerms, hasRequiredSearchTerms, matchesRouteConstraints, normalizeSearchText, searchTermVariants } from "./query-normalization.mjs";
 
 export function normalizeSearchRequest(input = {}) {
-  const query = String(input.query ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const query = normalizeSearchText(input.query);
   const rawFilters = input.filters && typeof input.filters === "object" ? input.filters : {};
   const formats = Array.isArray(rawFilters.format) ? rawFilters.format : rawFilters.format ? [rawFilters.format] : [];
   const format = [...new Set(formats.map((value) => String(value).toLowerCase().trim()).filter(Boolean))].sort();
@@ -61,17 +62,101 @@ export function diversifyResults(results, { limit = 5, maxPerDocument = 2 } = {}
   return output;
 }
 
-export function selectEvidence(results, { limit = 5, lowRelevanceThreshold = 0.25, maxPerDocument = 2 } = {}) {
+function normalizedMatchText(value) {
+  return compactKoreanSpacing(normalizeSearchText(value)).toLocaleLowerCase().replace(/(\p{N}+(?:[-_][\p{N}]+)?)\s*번/gu, "$1번");
+}
+
+function normalizedQueryTerms(query) {
+  return [...new Set(extractSearchTerms(query).map(normalizedMatchText).filter(Boolean))];
+}
+
+function matchingTermCount(value, terms) {
+  const text = normalizedMatchText(value);
+  return terms.filter((term) => {
+    const routeCodes = extractRouteCodes(term);
+    return routeCodes.length ? routeCodes.every((routeCode) => containsExactRouteCode(text, routeCode)) : text.includes(term);
+  }).length;
+}
+
+function compactMatchSpan(value, query) {
+  const text = compactKoreanSpacing(normalizeSearchText(value)).toLocaleLowerCase();
+  const terms = extractSearchTerms(query).flatMap((term) => searchTermVariants(term)).map((term) => compactKoreanSpacing(term).toLocaleLowerCase()).filter(Boolean);
+  const uniqueTerms = [...new Set(terms)];
+  const positions = uniqueTerms.map((term) => text.indexOf(term)).filter((position) => position >= 0);
+  if (!positions.length || positions.length < uniqueTerms.length) return 0;
+  const ends = uniqueTerms.map((term) => text.indexOf(term) + term.length);
+  return Math.max(0, Math.max(...ends) - Math.min(...positions));
+}
+
+export function evidenceProximityScore(row, query = "") {
+  const values = [row?.text, row?.nativeText, row?.ocrText, ...(row?.evidence || []).map((item) => item.context)].filter(Boolean);
+  const spans = values.map((value) => compactMatchSpan(value, query)).filter((span) => span > 0);
+  if (!spans.length) return 0;
+  return 1 / Math.min(...spans);
+}
+
+export function evidenceMatchPriority(row, query = "") {
+  const terms = normalizedQueryTerms(query);
+  return (row?.evidence || []).reduce((best, item) => {
+    const contextMatches = matchingTermCount(item.context, terms);
+    const ocrMatches = item.type === "visual" ? matchingTermCount(row.ocrText, terms) : 0;
+    const priority = (ocrMatches * 100) + (contextMatches * 10) + (item.type === "visual" && contextMatches ? 1 : 0);
+    return Math.max(best, priority);
+  }, 0);
+}
+
+export function selectEvidence(results, { limit = 5, lowRelevanceThreshold = 0.25, maxPerDocument = 2, query = "" } = {}) {
   const diversified = diversifyResults(results, { limit, maxPerDocument });
+  const terms = normalizedQueryTerms(query);
   return diversified.map((row) => {
     const evidence = Array.isArray(row.evidence) ? row.evidence : [];
-    const matchedEvidence = evidence[0] || null;
+    const rankedEvidence = evidence.map((item, index) => {
+      const matches = matchingTermCount(item.context, terms);
+      const visualOcrMatches = item.type === "visual" ? matchingTermCount(row.ocrText, terms) : 0;
+      return { item, index, matches, visualOcrMatches, visualBonus: item.type === "visual" && matches ? 1 : 0 };
+    }).sort((left, right) => right.visualOcrMatches - left.visualOcrMatches || right.matches - left.matches || right.visualBonus - left.visualBonus || left.index - right.index);
+    const matchedEvidence = (rankedEvidence[0]?.matches || rankedEvidence[0]?.visualOcrMatches ? rankedEvidence[0].item : evidence[0]) || null;
     return {
       ...row,
       matchedEvidence,
       lowRelevance: Number(row.score || 0) < lowRelevanceThreshold,
     };
   });
+}
+
+export function filterRouteConstrainedResults(results, query = "") {
+  return (results || []).filter((row) => matchesRouteConstraints(query, [row.title, row.heading, row.text, row.nativeText, row.ocrText]));
+}
+
+export function filterDirectEvidenceResults(results, query = "") {
+  return (results || []).filter((row) => {
+    const isVisual = (row.evidence || []).some((item) => item.type === "visual");
+    const values = isVisual ? [row.title, row.heading, row.ocrText] : [row.title, row.heading, row.text, row.nativeText, row.ocrText];
+    return hasRequiredSearchTerms(query, values);
+  });
+}
+
+function evidencePage(row) {
+  const first = (row?.evidence || [])[0];
+  if (first?.pageStart !== undefined) return String(first.pageStart);
+  const range = row?.sourceRange;
+  if (typeof range === "number" || typeof range === "string") return String(range);
+  return "";
+}
+
+export function collapseEvidenceDuplicates(results, query = "") {
+  const output = [];
+  for (const row of results || []) {
+    const page = evidencePage(row);
+    const isVisual = (row.evidence || []).some((item) => item.type === "visual");
+    const duplicateIndex = page ? output.findIndex((item) => String(item.documentId || "") === String(row.documentId || "") && evidencePage(item) === page && ((item.evidence || []).some((evidence) => evidence.type === "visual") !== isVisual)) : -1;
+    if (duplicateIndex < 0) { output.push(row); continue; }
+    const current = output[duplicateIndex];
+    const currentPriority = evidenceMatchPriority(current, query);
+    const nextPriority = evidenceMatchPriority(row, query);
+    if (nextPriority > currentPriority || (nextPriority === currentPriority && Number(row.score || 0) > Number(current.score || 0))) output[duplicateIndex] = row;
+  }
+  return output;
 }
 
 export function encodeCursor(offset) {

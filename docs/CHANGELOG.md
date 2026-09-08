@@ -42,6 +42,8 @@
 npm ci
 npm test
 npm run build
+npm run test:e2e
+npm run dist:win
 ```
 
-현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.
+검증 결과는 Node 테스트 140건 통과, 0건 실패, 1건 환경 조건 skip이며, Vite production build와 Windows x64 NSIS 패키징이 통과했습니다. Electron 시각 문서 E2E 1건은 현재 실행 환경에서 조건부 skip되었습니다. 현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.

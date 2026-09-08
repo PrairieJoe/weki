@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
+import { compactKoreanSpacing, hasRequiredSearchTerms, matchesRouteConstraints, normalizeSearchText, searchTermVariants } from "./query-normalization.mjs";
 
 const require = createRequire(import.meta.url);
 let BetterSqlite3 = null;
@@ -15,9 +16,21 @@ function clean(value) {
   return value === undefined || value === null ? "" : String(value);
 }
 
+function indexableText(value) {
+  const raw = normalizeSearchText(value);
+  const compact = compactKoreanSpacing(raw);
+  return [...new Set([raw, compact].filter(Boolean))].join(" ");
+}
+
 export function ftsLiteral(query) {
-  return clean(query).normalize("NFKC").trim().split(/\s+/u).filter(Boolean)
+  return normalizeSearchText(query).split(/\s+/u).filter(Boolean)
+      .map((token) => token.replace(/^(\p{N}+(?:-\p{N})*)번$/u, "$1"))
     .map((token) => `"${token.replaceAll('"', "")}"`).join(" AND ");
+}
+
+export function ftsPrefixLiteral(query) {
+  return normalizeSearchText(query).split(/\s+/u).filter(Boolean)
+    .map((token) => `"${token.replaceAll('"', "")}"*`).join(" AND ");
 }
 
 export function createSearchStore({ directory, filename = "knowledge-base.sqlite" }) {
@@ -145,13 +158,17 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     insertTrigram: db.prepare("INSERT INTO knowledge_trigram(unit_id, text) VALUES(?, ?)"),
     unlinkEvidence: db.prepare("DELETE FROM unit_evidence_refs WHERE unit_id = ?"),
     linkEvidence: db.prepare("INSERT OR IGNORE INTO unit_evidence_refs(unit_id, evidence_id) VALUES(?, ?)"),
+    embedding: db.prepare(`INSERT INTO embeddings(unit_id, dimension, vector_json, model, generation) VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(unit_id) DO UPDATE SET dimension=excluded.dimension, vector_json=excluded.vector_json, model=excluded.model, generation=excluded.generation`),
     search: db.prepare(`SELECT f.unit_id AS unitId, f.document_id AS documentId, d.format,
       d.created_at AS createdAt, d.modified_at AS modifiedAt, d.accessed_at AS accessedAt,
       f.title, f.heading, f.text, bm25(knowledge_fts, 8.0, 5.0, 3.0, 2.0, 1.5, 1.0) AS bm25
       FROM knowledge_fts f JOIN documents d ON d.id = f.document_id
       WHERE knowledge_fts MATCH @query ORDER BY bm25 LIMIT @limit`),
-    trigramSearch: db.prepare(`SELECT t.unit_id AS unitId, u.document_id AS documentId, 0.0 AS bm25
-      FROM knowledge_trigram t JOIN knowledge_units u ON u.id = t.unit_id
+    trigramSearch: db.prepare(`SELECT t.unit_id AS unitId, u.document_id AS documentId, d.format,
+      d.created_at AS createdAt, d.modified_at AS modifiedAt, d.accessed_at AS accessedAt,
+      u.title, u.heading, u.text, u.native_text AS nativeText, u.ocr_text AS ocrText, 0.0 AS bm25
+      FROM knowledge_trigram t JOIN knowledge_units u ON u.id = t.unit_id JOIN documents d ON d.id = u.document_id
       WHERE knowledge_trigram MATCH @query LIMIT @limit`),
     hydrate: db.prepare(`SELECT u.id AS unitId, u.document_id AS documentId, d.name AS documentName, d.format,
       d.source_status AS sourceStatus, d.cloud_original_file AS cloudOriginalFile,
@@ -206,19 +223,41 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       statements.unit.run({ id: clean(unit.id), documentId: clean(unit.documentId), title: clean(unit.title), heading: clean(unit.heading),
         text, nativeText: clean(unit.nativeText), ocrText: clean(unit.ocrText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}) });
       statements.deleteFts.run(clean(unit.id));
-      statements.insertFts.run(clean(unit.id), clean(unit.documentId), clean(unit.title), clean(unit.heading), text, clean(unit.nativeText), clean(unit.ocrText));
+      statements.insertFts.run(clean(unit.id), clean(unit.documentId), indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText));
       statements.deleteTrigram.run(clean(unit.id));
-      statements.insertTrigram.run(clean(unit.id), `${clean(unit.title)} ${clean(unit.heading)} ${text}`);
+      statements.insertTrigram.run(clean(unit.id), indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)}`));
       statements.unlinkEvidence.run(clean(unit.id));
       for (const evidenceId of unit.evidenceIds || []) statements.linkEvidence.run(clean(unit.id), clean(evidenceId));
     });
   }
 
   function searchLexical(query, { limit = 200, filters = {} } = {}) {
-    const match = ftsLiteral(query);
+    const normalizedQuery = normalizeSearchText(query);
+    const match = ftsLiteral(normalizedQuery);
     if (!match) return [];
     const maxRows = Math.min(200, Math.max(1, Number(limit) || 200));
     let rows = statements.search.all({ query: match, limit: maxRows });
+    if (!rows.length) {
+      const terms = normalizedQuery.split(/\s+/u).filter(Boolean);
+      const fallbackRows = [];
+      const known = new Set();
+      const compactQuery = compactKoreanSpacing(normalizedQuery);
+      if (compactQuery !== normalizedQuery) {
+        for (const row of statements.search.all({ query: ftsLiteral(compactQuery), limit: maxRows })) {
+          if (!known.has(row.unitId)) { fallbackRows.push(row); known.add(row.unitId); }
+        }
+      }
+      for (const term of terms) {
+        for (const variant of searchTermVariants(term)) {
+          const variantQuery = variant === term ? ftsLiteral(variant) : ftsPrefixLiteral(variant);
+          for (const row of statements.search.all({ query: variantQuery, limit: maxRows })) {
+            if (!known.has(row.unitId)) { fallbackRows.push(row); known.add(row.unitId); }
+          }
+        }
+        if (fallbackRows.length >= maxRows) break;
+      }
+      rows = fallbackRows.slice(0, maxRows);
+    }
     if (rows.length < maxRows && clean(query).trim().length >= 3) {
       const known = new Set(rows.map((row) => row.unitId));
       const trigramRows = statements.trigramSearch.all({ query: match, limit: maxRows });
@@ -231,6 +270,8 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     const criterion = filters?.dateCriterion === "created" ? "createdAt" : filters?.dateCriterion === "accessed" ? "accessedAt" : "modifiedAt";
     if (filters?.from) rows = rows.filter((row) => row[criterion] && String(row[criterion]) >= filters.from);
     if (filters?.to) rows = rows.filter((row) => row[criterion] && String(row[criterion]).slice(0, 10) <= filters.to);
+    rows = rows.filter((row) => matchesRouteConstraints(normalizedQuery, [row.title, row.heading, row.text, row.nativeText, row.ocrText]));
+    rows = rows.filter((row) => hasRequiredSearchTerms(normalizedQuery, [row.title, row.heading, row.text, row.nativeText, row.ocrText]));
     return rows.map((row, index) => ({ ...row, engine: "fts", score: 1 / (index + 1) }));
   }
 
@@ -263,6 +304,37 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     });
   }
 
+  function replaceDocumentIndex({ document, entries = [] }) {
+    const documentId = clean(document?.id);
+    if (!documentId) throw new Error("document id is required");
+    const oldUnitIds = db.prepare("SELECT id FROM knowledge_units WHERE document_id = ?").all(documentId).map((row) => row.id);
+    transaction(() => {
+      for (const id of oldUnitIds) { statements.deleteFts.run(id); statements.deleteTrigram.run(id); }
+      db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
+      statements.document.run({ id: documentId, name: clean(document.name), format: clean(document.format),
+        createdAt: document.createdAt ?? document.registeredAt ?? null, modifiedAt: document.modifiedAt ?? null, accessedAt: document.accessedAt ?? null,
+        sourceHash: document.sourceHash ?? document.hash ?? null, sourceStatus: clean(document.sourceStatus || "unavailable"), cloudOriginalFile: document.cloudOriginalFile ?? null });
+      for (const entry of entries) {
+        const fragment = entry.evidence || {};
+        statements.evidence.run({ id: clean(fragment.id), documentId, pageStart: Number(fragment.pageStart) || 1,
+          pageEnd: Number(fragment.pageEnd) || Number(fragment.pageStart) || 1, type: clean(fragment.type) || "text", origin: fragment.origin ?? null,
+          assetName: fragment.assetName ?? null, context: clean(fragment.context) });
+        const unit = entry.unit || {};
+        const unitId = clean(unit.id);
+        const text = clean(unit.text);
+        statements.unit.run({ id: unitId, documentId, title: clean(unit.title), heading: clean(unit.heading), text,
+          nativeText: clean(unit.nativeText), ocrText: clean(unit.ocrText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}) });
+        statements.deleteFts.run(unitId);
+        statements.insertFts.run(unitId, documentId, indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText));
+        statements.deleteTrigram.run(unitId);
+        statements.insertTrigram.run(unitId, indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)}`));
+        statements.unlinkEvidence.run(unitId);
+        for (const evidenceId of unit.evidenceIds || []) statements.linkEvidence.run(unitId, clean(evidenceId));
+        if (entry.embedding?.vector?.length) statements.embedding.run(unitId, Number(entry.embedding.dimension || entry.embedding.vector.length), JSON.stringify(entry.embedding.vector), entry.embedding.model ?? null, entry.embedding.generation ?? null);
+      }
+    });
+  }
+
   function listEmbeddings({ dimension = null, generation = null } = {}) {
     let sql = "SELECT unit_id AS unitId, dimension, vector_json AS vectorJson, model, generation FROM embeddings";
     const params = [];
@@ -278,6 +350,10 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     try { db.prepare("SELECT count(*) AS count FROM knowledge_fts").get(); } catch { fts = "unavailable"; }
     const state = Object.fromEntries(statements.health.all().map((row) => [row.name, row]));
     return { sqlite: "healthy", sqliteDriver: BetterSqlite3 ? "better-sqlite3" : "node:sqlite", fts, ann: state.ann?.status || "unavailable", model: state.model?.status || "unavailable", indexGeneration: state.fts?.generation || null };
+  }
+
+  function getIndexState(name) {
+    return statements.health.all().find((row) => row.name === String(name)) || null;
   }
 
   function recordSearch({ sessionId = crypto.randomUUID(), query = "", results = [], rankingVersion = "unknown" }) {
@@ -308,10 +384,12 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     upsertKnowledgeUnit,
     upsertEmbedding,
     deleteDocument,
+    replaceDocumentIndex,
     listEmbeddings,
     searchLexical,
     hydrateUnits,
     setIndexState: (state) => statements.setIndex.run({ name: clean(state.name), generation: clean(state.generation), revision: Number(state.revision) || 0, status: clean(state.status) || "ready", updatedAt: new Date().toISOString() }),
+    getIndexState,
     recordSearch,
     recordFeedback,
     health,
