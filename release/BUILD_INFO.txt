@@ -1,15 +1,12 @@
-Source commit: aae004bd29b6c83f02337d751e0c2722b93234a2
-Build date/time: 2026-09-07 17:49:04 +09:00
-Application version: 1.0.0
-Installer file name: Weki-1.0.0-Setup.exe
-Installer path (external archive): final/Weki-1.0.0-Setup.exe
-Installer SHA-256: 7a52a825ab76525a3342efd0ef37d8d99a24a2440d33f8be2c3cd9d6a40402d2
-Installer SHA-512: sYYqKvBcKDFcyKtyxxSA6AcgqQrrZ5oknpvkLMFyC5RjQ1WFTjDtsBGhHjXzsLrfSVs8c+8RKdaUXrYlZHC9gg==
-npm test: PASS (64 passed, 0 failed)
+Source commit: 2f7edf624af0a77015c3e526dc46318b699600cd
+Build date/time: 2026-09-08 09:15:00 +09:00
+Application version: 1.1.0
+Installer file name: Weki-1.1.0-Setup.exe
+Installer path (external archive): GitHub Release v1.1.0
+Installer SHA-256: 670607983955037CA88F460F9EC820DACCA7A1857A62AAD7AE421104B915CE7C
+Installer SHA-512: nMFT4PVIff2j9O6Dxrhiik2R/Bk/kbt8kuCPwwkozaQRk52MkeHAt5wZD4lWERn5RHox6cshgtRrpG4HCco8KA==
+npm test: PASS (90 passed, 0 failed)
 npm run build: PASS
 electron-builder --win nsis: PASS
-Packaging check: PASS (packaged version 1.0.0; app.asar and entrypoints present)
-Packaged smoke: PASS (/api/status HTTP 200; lexical/evidence healthy; isolated data directory)
-Installer smoke: PASS (silent install, update, relaunch, data marker preservation)
-REQ-SCALE-001: EXCLUDED FROM THIS RELEASE (follow-up performance validation)
-Release status: FINAL 1.0.0
+Packaging check: PASS (packaged version 1.1.0; app.asar and entrypoints present)
+Release status: FINAL 1.1.0
