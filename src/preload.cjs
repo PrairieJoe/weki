@@ -5,3 +5,7 @@ contextBridge.exposeInMainWorld('wekiCredentials', {
   saveToken: (token) => ipcRenderer.invoke('weki:save-mybox-token', token),
   clearToken: () => ipcRenderer.invoke('weki:clear-mybox-token'),
 });
+
+contextBridge.exposeInMainWorld('wekiApp', {
+  restart: () => ipcRenderer.invoke('weki:restart'),
+});

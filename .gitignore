@@ -9,9 +9,12 @@ dist/
 /release-internal/
 /release-verify*/
 /release-final/
+/release-final*/
+/release-vnext/
 /release/*.exe
 /release/*.blockmap
 /release/win-unpacked/
+/release/win-unpacked.tmp/
 /release/builder-debug.yml
 
 # Local Weki index and user documents

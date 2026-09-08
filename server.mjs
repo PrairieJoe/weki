@@ -17,8 +17,18 @@ import { createServer as createViteServer } from "vite";
 import { buildPageMetrics, createBackupSnapshot, createFolderSnapshot, reconcileFolderSnapshotOriginals, removeDocumentData } from "./src/server/backup.mjs";
 import { ACTIVE_JOB_STATUSES, visibleJobs } from "./src/server/jobs.mjs";
 import { createMyboxClient } from "./src/server/mybox.mjs";
-import { CLOUD_CATALOG_NAME, downloadCloudOriginal, findCloudOriginalResource, findWekiFolderStructure, mergeCloudCatalog, readCloudCatalog, shouldRunInitialMyboxSync } from "./src/server/mybox-sync.mjs";
+import { CLOUD_CATALOG_NAME, CLOUD_RUNTIME_MANIFEST_NAME, CLOUD_RUNTIME_ROOT_NAME, CLOUD_RUNTIME_VERSION_NAME, downloadCloudOriginal, findCloudOriginalResource, findRuntimeFolderStructure, findRuntimeResource, findWekiFolderStructure, mergeCloudCatalog, readCloudCatalog, shouldRunInitialMyboxSync } from "./src/server/mybox-sync.mjs";
 import { documentOriginalKey, migrateLegacyOriginals, normalizeOriginalName, originalNameOf, resolveDocumentOriginalPath } from "./src/server/original-storage.mjs";
+import { createSearchService, RANKING_VERSION } from "./src/search/service.mjs";
+import { createSearchStore } from "./src/search/sqlite-store.mjs";
+import { createSemanticEngine } from "./src/search/semantic-engine.mjs";
+import { createAnnIndex } from "./src/search/ann-index.mjs";
+import { buildEvidenceFragments } from "./src/processing/evidence.mjs";
+import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
+import { getComponentState, installComponent, retryComponent } from "./src/runtime/components.mjs";
+import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
+import { DEFAULT_RUNTIME_MANIFEST } from "./src/runtime/semantic-manifest.mjs";
+import { RUNTIME_PUBLIC_KEY } from "./src/runtime/runtime-public-key.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 function loadEnvFile() {
@@ -39,6 +49,8 @@ const backupsDir = path.join(dataDir, "backups");
 const tessdataDir = path.join(dataDir, "tessdata");
 const credentialsDir = path.join(dataDir, "credentials");
 const dbPath = path.join(dataDir, "knowledge-base.json");
+const v2DataDir = process.env.WEKI_V2_DATA_DIR || path.join(dataDir, "v2");
+const runtimeRoot = process.env.WEKI_RUNTIME_DIR || path.join(dataDir, "runtime", "v1");
 const allowed = new Set(["pdf", "pptx", "docx", "hwpx", "hwp"]);
 
 async function ensureStore() {
@@ -81,7 +93,7 @@ async function reconcileOriginalReferences(db, storeDir = dataDir) {
     if (doc.originalKey !== originalKey) { doc.originalKey = originalKey; changed = true; }
     if (Object.hasOwn(doc, "originalPath")) { delete doc.originalPath; changed = true; }
     const nextSourceStatus = verified ? "local_available" : doc.cloudOriginalFile ? "cloud_available" : "unavailable";
-    if (doc.sourceStatus !== nextSourceStatus && (doc.sourceStatus || verified)) { doc.sourceStatus = nextSourceStatus; changed = true; }
+    if (doc.sourceStatus !== nextSourceStatus) { doc.sourceStatus = nextSourceStatus; changed = true; }
   }
   return { changed };
 }
@@ -117,7 +129,10 @@ async function writeDbAtomic(db) {
   await fs.writeFile(temporaryPath, JSON.stringify(persistableDatabase(db), null, 2));
   try { await fs.rename(temporaryPath, dbPath); } catch (error) { await fs.copyFile(temporaryPath, dbPath); await fs.unlink(temporaryPath).catch(() => {}); if (error.code !== "EEXIST") throw error; }
 }
+let storageStatsCache = null;
+let storageStatsCacheExpiresAt = 0;
 async function readStorageStats() {
+  if (storageStatsCache && Date.now() < storageStatsCacheExpiresAt) return storageStatsCache;
   const directoryBytes = async (directory) => {
     let total = 0;
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
@@ -131,21 +146,40 @@ async function readStorageStats() {
     const { bsize, blocks, bavail } = await fs.statfs(dataDir);
     const total = Number(bsize) * Number(blocks);
     const available = Number(bsize) * Number(bavail);
-    return { usage: Math.max(0, total - available), available, total, dataUsage: await directoryBytes(dataDir) };
+    storageStatsCache = { usage: Math.max(0, total - available), available, total, dataUsage: await directoryBytes(dataDir) };
+    storageStatsCacheExpiresAt = Date.now() + 30_000;
+    return storageStatsCache;
   } catch {
-    return { usage: 0, available: 0, total: 0, dataUsage: 0 };
+    storageStatsCache = { usage: 0, available: 0, total: 0, dataUsage: 0 };
+    storageStatsCacheExpiresAt = Date.now() + 30_000;
+    return storageStatsCache;
   }
 }
 class JobInterrupted extends Error {
   constructor(status) { super(status === "paused" ? "작업이 일시중지되었습니다." : "작업이 취소되었습니다."); this.status = status; }
 }
-async function checkpoint(jobId, completed, total) {
+const semanticProcessingEnabled = () => Boolean(embeddingProvider?.available);
+const processingModeResolution = (mode) => {
+  const requestedMode = mode === "local-ai" ? "local-ai" : "lightweight";
+  if (requestedMode === "local-ai" && !semanticProcessingEnabled()) return { requestedMode, effectiveMode: "lightweight", fallbackReason: "semantic_model_unavailable" };
+  return { requestedMode, effectiveMode: requestedMode, fallbackReason: null };
+};
+const effectiveProcessingMode = (mode) => processingModeResolution(mode).effectiveMode;
+const processingDetail = (mode, stage, completed = null, total = null) => {
+  const resolution = processingModeResolution(mode);
+  const effective = resolution.effectiveMode;
+  const fallback = resolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. " : "";
+  if (stage === "index") return `${fallback}${effective === "local-ai" ? "Local AI: E5 의미 임베딩과 Evidence 색인을 생성 중입니다." : "경량 처리: Evidence 색인을 생성 중입니다."}`;
+  if (Number.isFinite(completed) && Number.isFinite(total)) return `${fallback}${effective === "local-ai" ? "Local AI" : "경량 처리"} · ${completed}/${total} 페이지·슬라이드 처리 완료`;
+  return `${fallback}${effective === "local-ai" ? "Local AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : "경량 처리: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다."}`;
+};
+async function checkpoint(jobId, completed, total, mode = "lightweight") {
   const db = await readDb(); const job = db.jobs.find((item) => item.id === jobId);
   if (!job || job.status === "cancelled") throw new JobInterrupted("cancelled");
   if (job.status === "paused") throw new JobInterrupted("paused");
   job.completedUnits = completed; job.totalUnits = total;
   job.progress = Math.max(1, Math.min(95, Math.round((completed / Math.max(1, total)) * 95)));
-  job.detail = `${completed}/${total} 페이지·슬라이드 처리 완료`; await writeDb(db);
+  job.detail = processingDetail(mode, "extract", completed, total); await writeDb(db);
 }
 const textOnly = (value) => value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
 const normalizeFilename = (name) => {
@@ -242,6 +276,9 @@ async function extractHwp(buffer, options = {}) {
 }
 async function extract(buffer, ext, options) {
   if (ext === "pdf") return extractPdf(buffer, options);
+  if (["hwp", "hwpx"].includes(ext) && documentRenderer) {
+    try { return await documentRenderer.extract(buffer, options); } catch { /* Fall back to the native parser for damaged or unsupported files. */ }
+  }
   if (["pptx", "docx", "hwpx"].includes(ext)) return extractZip(buffer, ext, options);
   if (ext === "hwp") return extractHwp(buffer, options);
   throw new Error("지원하지 않는 문서 형식입니다.");
@@ -274,27 +311,29 @@ async function runQueue() {
       const db = await readDb(); if (db.maintenance) break;
       const job = db.jobs.filter((item) => item.status === "queued" && ["reprocess", "registration"].includes(item.kind)).sort((a, b) => (b.priority || 0) - (a.priority || 0) || new Date(a.createdAt) - new Date(b.createdAt))[0]; if (!job) break;
       if (job.kind === "registration") {
-        job.status = "processing"; job.progress = 15; job.detail = "원본을 보관하고 페이지별 텍스트를 추출 중입니다."; await writeDb(db);
+        const modeResolution = processingModeResolution(job.mode); job.status = "processing"; job.progress = 15; job.detail = processingDetail(job.mode, "extract"); job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; await writeDb(db);
         try {
-          const buffer = await fs.readFile(job.stagedPath); const pages = await extract(buffer, job.ext, { onUnit: (completed, total) => checkpoint(job.id, completed, total) });
+          const buffer = await fs.readFile(job.stagedPath); const pages = await extract(buffer, job.ext, { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
           if (!pages.length) throw new Error("검색 가능한 텍스트를 추출하지 못했습니다.");
           const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (!freshJob || freshJob.status === "cancelled") { await fs.unlink(job.stagedPath).catch(() => {}); continue; }
           const originalName = normalizeOriginalName(job.name, `${job.hash}.${job.ext}`); const originalKey = `${job.hash}/${originalName}`; const originalPath = path.join(originalsDir, job.hash, originalName); await writeOriginalAtomically(originalPath, buffer); await fs.unlink(job.stagedPath).catch(() => {});
-          const pdfOcr = job.ext === "pdf"; const now = new Date().toISOString(); const units = makeUnits(pages); const metrics = buildPageMetrics(pages, units); const doc = { id: crypto.randomUUID(), name: job.name, originalName, format: job.ext.toUpperCase(), hash: job.hash, originalKey, size: job.size, registeredAt: now, modifiedAt: job.modifiedAt, updatedAt: now, processingMode: job.mode, ...metrics, sourceStatus: "local_available", nativeTextStatus: "success", ocrStatus: pdfOcr ? "success" : "unavailable", visualAnalysisStatus: "not_supported", units };
-          fresh.documents.push(doc); freshJob.documentId = doc.id; freshJob.status = "completed"; freshJob.progress = 100; freshJob.detail = `${metrics.pageCount}개 페이지 처리 완료${metrics.failedPageCount ? ` · ${metrics.failedPageCount}개 페이지 검색 불가` : ""}`; freshJob.completedAt = now; delete freshJob.stagedPath; fresh.audit.unshift({ id: crypto.randomUUID(), type: "registration", documentId: doc.id, createdAt: now, detail: freshJob.detail }); await writeDb(fresh);
+          const pdfOcr = job.ext === "pdf"; const now = new Date().toISOString(); const units = makeUnits(pages); const metrics = buildPageMetrics(pages, units); const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; const format = job.ext.toUpperCase(); const doc = { id: crypto.randomUUID(), name: job.name, originalName, format, hash: job.hash, originalKey, size: job.size, registeredAt: now, modifiedAt: job.modifiedAt, updatedAt: now, processingMode: effectiveMode, requestedProcessingMode: job.mode, processingModeFallback: modeResolution.fallbackReason, advancedAnalysis: effectiveMode === "local-ai", semanticAnalysisStatus: effectiveMode === "local-ai" ? "pending" : "degraded", rendererStatus: rendererAvailableForFormat(format) ? "ready" : "fallback", ...metrics, sourceStatus: "local_available", nativeTextStatus: "success", ocrStatus: pdfOcr ? "success" : "unavailable", visualAnalysisStatus: "not_supported", units };
+          fresh.documents.push(doc); freshJob.documentId = doc.id; freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.processingModeFallback = modeResolution.fallbackReason; freshJob.detail = processingDetail(job.mode, "index"); delete freshJob.stagedPath; await writeDb(fresh); await syncDocumentToV2(doc);
+          const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === doc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${metrics.pageCount}개 페이지 처리 완료${metrics.failedPageCount ? ` · ${metrics.failedPageCount}개 페이지 검색 불가` : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = now; indexed.audit.unshift({ id: crypto.randomUUID(), type: "registration", documentId: doc.id, createdAt: now, detail: indexedJob.detail }); await writeDb(indexed); }
         } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); if (error.status === "cancelled") { await fs.unlink(freshJob.stagedPath || job.stagedPath).catch(() => {}); delete freshJob.stagedPath; } await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
         continue;
       }
        const doc = db.documents.find((item) => item.id === job.documentId);
        let originalPath;
        try { originalPath = await ensureDocumentOriginal(doc); } catch (error) { job.status = "failed"; job.detail = error.message || "원본이 없어 재처리할 수 없습니다."; await writeDb(db); continue; }
-      job.status = "processing"; job.progress = 20; job.detail = "기존 색인을 유지한 채 로컬 재처리 중입니다."; await writeDb(db);
+      const modeResolution = processingModeResolution(job.mode); job.status = "processing"; job.progress = 20; job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; job.detail = modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : job.effectiveMode === "local-ai" ? "Local AI: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : "경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다."; await writeDb(db);
       try {
-        const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total) });
+        const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
         const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); const freshDoc = fresh.documents.find((item) => item.id === job.documentId);
         if (!freshJob || freshJob.status === "cancelled") continue;
-        const pdfOcr = freshDoc.format === "PDF"; freshDoc.units = makeUnits(pages); Object.assign(freshDoc, buildPageMetrics(pages, freshDoc.units)); freshDoc.updatedAt = new Date().toISOString(); freshDoc.nativeTextStatus = "success"; freshDoc.ocrStatus = pdfOcr ? "success" : "unavailable";
-        freshJob.status = "completed"; freshJob.progress = 100; freshJob.detail = `${freshDoc.pageCount}개 페이지 재처리 완료${freshDoc.failedPageCount ? ` · ${freshDoc.failedPageCount}개 페이지 검색 불가` : ""}${pdfOcr ? " · OCR 완료" : ""}`; freshJob.completedAt = new Date().toISOString(); fresh.audit.unshift({ id: crypto.randomUUID(), type: "reprocess", documentId: freshDoc.id, createdAt: freshJob.completedAt, detail: freshJob.detail }); await writeDb(fresh);
+        const pdfOcr = freshDoc.format === "PDF"; const modeResolution = processingModeResolution(job.mode); const effectiveMode = modeResolution.effectiveMode; freshDoc.processingMode = effectiveMode; freshDoc.requestedProcessingMode = job.mode; freshDoc.processingModeFallback = modeResolution.fallbackReason; freshDoc.advancedAnalysis = effectiveMode === "local-ai"; freshDoc.semanticAnalysisStatus = "pending"; freshDoc.rendererStatus = rendererAvailableForFormat(freshDoc.format) ? "ready" : "fallback"; freshDoc.units = makeUnits(pages); Object.assign(freshDoc, buildPageMetrics(pages, freshDoc.units)); freshDoc.updatedAt = new Date().toISOString(); freshDoc.nativeTextStatus = "success"; freshDoc.ocrStatus = pdfOcr ? "success" : "unavailable";
+        freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.processingModeFallback = modeResolution.fallbackReason; freshJob.detail = processingDetail(job.mode, "index"); await writeDb(fresh); await syncDocumentToV2(freshDoc);
+        const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === freshDoc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${indexedDoc.pageCount}개 페이지 재처리 완료${indexedDoc.failedPageCount ? ` · ${indexedDoc.failedPageCount}개 페이지 검색 불가` : ""}${pdfOcr ? " · OCR 완료" : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = new Date().toISOString(); indexed.audit.unshift({ id: crypto.randomUUID(), type: "reprocess", documentId: indexedDoc.id, createdAt: indexedJob.completedAt, detail: indexedJob.detail }); await writeDb(indexed); }
       } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
     }
   } finally { queueRunning = false; }
@@ -348,6 +387,11 @@ const publicMyboxError = (error) => {
   return { credentialState: authFailure ? "invalid" : "unavailable", reason: authFailure ? "token_invalid" : "network_unavailable", message: authFailure ? myboxCredentialMessage.invalid : myboxCredentialMessage.unavailable };
 };
 const findMyboxFolderStructure = ({ create = false } = {}) => findWekiFolderStructure(mybox, { parentId: process.env.NAVER_MBOX_FOLDER_ID || undefined, create });
+const cloudRuntimeRootName = process.env.WEKI_MYBOX_RUNTIME_ROOT || CLOUD_RUNTIME_ROOT_NAME;
+const findMyboxRuntimeStructure = () => findRuntimeFolderStructure(mybox, {
+  parentId: process.env.NAVER_MBOX_RUNTIME_PARENT_ID || undefined,
+  rootName: cloudRuntimeRootName,
+});
 const readFolderSnapshot = async (structure) => (await readCloudCatalog(mybox, structure)).snapshot;
 const myboxSyncState = { state: "idle", message: "" };
 let myboxSyncPromise = null;
@@ -389,10 +433,10 @@ async function ensureDocumentOriginal(document) {
   const lockKey = String(document.hash || originalKey || document.cloudOriginalFile).toLowerCase();
   if (!cloudOriginalDownloads.has(lockKey)) {
     cloudOriginalDownloads.set(lockKey, (async () => {
-      const markSourceStatus = async (status) => {
-        const current = await readDb(); const currentDoc = current.documents.find((item) => item.id === document.id);
-        if (currentDoc) { currentDoc.sourceStatus = status; await writeDb(current); }
-      };
+        const markSourceStatus = async (status) => {
+          const current = await readDb(); const currentDoc = current.documents.find((item) => item.id === document.id);
+          if (currentDoc) { currentDoc.sourceStatus = status; await writeDb(current); v2Store?.updateDocumentSource(currentDoc); }
+        };
       await markSourceStatus("syncing");
       try {
         const structure = await findMyboxFolderStructure();
@@ -402,7 +446,7 @@ async function ensureDocumentOriginal(document) {
         await writeOriginalAtomically(originalPath, downloaded.bytes);
         const current = await readDb();
         const currentDoc = current.documents.find((item) => item.id === document.id);
-        if (currentDoc) { currentDoc.originalKey = originalKey; currentDoc.sourceStatus = "local_available"; currentDoc.cloudOriginalFile = document.cloudOriginalFile; delete currentDoc.originalPath; await writeDbAtomic(current); }
+        if (currentDoc) { currentDoc.originalKey = originalKey; currentDoc.sourceStatus = "local_available"; currentDoc.cloudOriginalFile = document.cloudOriginalFile; delete currentDoc.originalPath; await writeDbAtomic(current); await syncDocumentToV2(currentDoc); }
         return originalPath;
       } catch (error) {
         await markSourceStatus(document.cloudOriginalFile ? "cloud_available" : "unavailable");
@@ -461,9 +505,9 @@ async function verifyRemoteSnapshotOriginals(structure, snapshot) {
 }
 async function copyStoreContents(targetDir) {
   await fs.mkdir(targetDir, { recursive: true });
-  for (const entry of ["knowledge-base.json", "originals", "incoming", "backups", "tessdata", "credentials", "storage-location.json", ".weki-storage-root"]) {
+  for (const entry of ["knowledge-base.json", "v2", "runtime", "originals", "incoming", "backups", "tessdata", "credentials", "storage-location.json", ".weki-storage-root"]) {
     const source = path.join(dataDir, entry); const destination = path.join(targetDir, entry);
-    try { await fs.cp(source, destination, { recursive: true, force: false, errorOnExist: false }); } catch (error) { if (error.code !== "EEXIST") throw error; }
+    try { await fs.cp(source, destination, { recursive: true, force: false, errorOnExist: false }); } catch (error) { if (error.code !== "EEXIST" && error.code !== "ENOENT") throw error; }
   }
   JSON.parse(await fs.readFile(path.join(targetDir, "knowledge-base.json"), "utf8"));
 }
@@ -481,7 +525,7 @@ function updateWindowsStoragePointer(targetDir, cleanupRoot = null) {
   } catch { return false; }
 }
 async function removeManagedStore(rootDir) {
-  const managedDirectories = ["originals", "incoming", "backups", "tessdata", "credentials"];
+  const managedDirectories = ["v2", "runtime", "originals", "incoming", "backups", "tessdata", "credentials"];
   if (!(process.platform === "win32" && process.env.WEKI_DESKTOP === "1")) managedDirectories.push(".runtime");
   for (const entry of managedDirectories) await fs.rm(path.join(rootDir, entry), { recursive: true, force: true });
   for (const entry of ["knowledge-base.json", "storage-location.json", ".weki-storage-root"]) await fs.rm(path.join(rootDir, entry), { force: true });
@@ -494,6 +538,72 @@ async function removeManagedStore(rootDir) {
 }
 
 const initialStoreCreated = await ensureStore();
+const databaseForIndex = await readDb();
+const v2Enabled = process.env.WEKI_SEARCH_V2 === "1";
+const v2Store = v2Enabled ? createSearchStore({ directory: v2DataDir }) : null;
+if (v2Store) {
+  for (const document of databaseForIndex.documents || []) v2Store.updateDocumentSource(document);
+}
+const runtimeComponentState = await getComponentState(runtimeRoot);
+const rendererComponentPath = runtimeComponentState.components?.["document-renderer"]?.status === "ready" ? runtimeComponentState.components["document-renderer"].path : null;
+const documentRenderer = rendererComponentPath ? await createDocumentRenderer({ componentPath: rendererComponentPath }).catch(() => null) : null;
+const rendererAvailableForFormat = (format) => Boolean(documentRenderer) && ["HWP", "HWPX"].includes(String(format || "").toUpperCase());
+const semanticModelPath = runtimeComponentState.components?.["semantic-model"]?.status === "ready" ? runtimeComponentState.components["semantic-model"].path : null;
+const embeddingProvider = v2Enabled && semanticModelPath ? await createRuntimeEmbeddingProvider({ componentPath: semanticModelPath }) : null;
+const annIndex = v2Store ? createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 }) : null;
+if (v2Store) v2Store.setIndexState({ name: "model", generation: semanticModelPath || "none", revision: Date.now(), status: embeddingProvider?.available ? "ready" : semanticModelPath ? "degraded" : "unavailable" });
+if (v2Store && annIndex && embeddingProvider?.available) {
+  const existingEmbeddings = v2Store.listEmbeddings({ dimension: 384 });
+  if (existingEmbeddings.length && (await annIndex.health()).status !== "healthy") {
+    try { const generation = await annIndex.build(existingEmbeddings); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later registration can rebuild the ANN generation. */ }
+  }
+}
+const semanticEngine = v2Store ? createSemanticEngine({ store: v2Store, annIndex, dimension: 384, embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null }) : null;
+const v2Search = v2Store ? createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine) }) : null;
+async function syncDocumentToV2(document) {
+  if (!v2Store || !document?.id) return;
+  v2Store.deleteDocument(document.id);
+  v2Store.upsertDocument({ id: document.id, name: document.name, format: String(document.format || "").toLowerCase(), createdAt: document.registeredAt, modifiedAt: document.modifiedAt, sourceHash: document.hash, sourceStatus: document.sourceStatus, cloudOriginalFile: document.cloudOriginalFile || null });
+  for (const unit of document.units || []) {
+    const fragments = buildEvidenceFragments({ documentId: document.id, page: unit.range, nativeText: unit.evidenceType === "text" ? (unit.nativeText || unit.text) : "", ocrText: unit.evidenceType === "text" ? unit.ocrText : "", table: unit.evidenceType === "table" ? { headers: [], rows: [[unit.text]] } : null, visualAssets: unit.visualAssetName ? [{ name: unit.visualAssetName, mime: unit.visualMime, ocrText: unit.text }] : [], maxTokens: 384, overlapTokens: 64 });
+    for (const fragment of fragments) {
+      v2Store.upsertEvidenceFragment({ id: fragment.id, documentId: document.id, pageStart: fragment.pageStart, pageEnd: fragment.pageEnd, type: fragment.type, origin: fragment.origin, assetName: fragment.assetName || null, context: fragment.context });
+      const indexedUnitId = `${unit.id}:${fragment.id}`;
+      v2Store.upsertKnowledgeUnit({ id: indexedUnitId, documentId: document.id, title: document.name, heading: unit.heading || "", text: fragment.context || "", nativeText: unit.nativeText || "", ocrText: unit.ocrText || "", sourceRange: unit.range, evidenceIds: [fragment.id] });
+      if (embeddingProvider?.available) {
+        try { const vector = await embeddingProvider.embed(`${document.name} ${unit.heading || ""} ${fragment.context || ""}`, "passage"); v2Store.upsertEmbedding({ unitId: indexedUnitId, vector, dimension: vector.length, model: "multilingual-e5-small", generation: String(document.updatedAt || document.registeredAt || "active") }); } catch { /* Semantic indexing remains optional; lexical indexing is authoritative. */ }
+      }
+    }
+  }
+  if (embeddingProvider?.available && annIndex) {
+    try { const generation = await annIndex.build(v2Store.listEmbeddings({ dimension: 384 })); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later rebuild can recover a failed ANN generation. */ }
+  }
+  v2Store.setIndexState({ name: "fts", generation: String(document.updatedAt || document.registeredAt || Date.now()), revision: Date.now(), status: "ready" });
+}
+const optionalRuntimeComponents = ["semantic-model", "document-renderer"];
+async function runtimeStatus() {
+  const state = await getComponentState(runtimeRoot);
+  let manifest = null;
+  try { manifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Optional packs are not installed yet. */ }
+  const manifestEntries = Array.isArray(manifest?.components) ? manifest.components : [];
+  const installable = { "semantic-model": { version: DEFAULT_RUNTIME_MANIFEST.components[0].version, license: DEFAULT_RUNTIME_MANIFEST.license, source: DEFAULT_RUNTIME_MANIFEST.source } };
+  for (const entry of manifestEntries) installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null };
+  const knownIds = [...new Set([...optionalRuntimeComponents, ...Object.keys(state.components || {}), ...manifestEntries.map((entry) => entry.id)])];
+  const components = {};
+  for (const id of knownIds) {
+    const current = state.components?.[id];
+    if (current) {
+      let status = current.status;
+      if (status === "ready" && current.path) {
+        try { const stat = await fs.stat(current.path); if (!stat.isDirectory()) status = "missing"; } catch { status = "missing"; }
+      }
+      components[id] = { ...current, status, installable: Boolean(installable[id]), reason: status === "missing" && !installable[id] ? "runtime_pack_not_configured" : current.reason || null };
+    } else {
+      components[id] = { id, status: "missing", version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(installable[id]), reason: installable[id] ? null : "runtime_pack_not_configured" };
+    }
+  }
+  return { rootDirectory: runtimeRoot, manifestVersion: manifest?.version || null, manifestUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, installable, components };
+}
 const app = express();
 app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024, files: 30 } });
@@ -508,12 +618,29 @@ app.get("/api/status", async (_req, res) => {
     dataDirectory: dataDir,
     maintenance: db.maintenance ?? null,
     engines: { lexical: "healthy", evidence: "healthy" },
+    search: v2Store ? { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health() } : { sqlite: "disabled", fts: "disabled", ann: "disabled", model: "disabled", indexGeneration: null },
+    runtime: await runtimeStatus(),
+    searchVersion: v2Enabled ? "v2" : "v1",
+    rankingVersion: RANKING_VERSION,
   });
 });
 app.get("/api/mybox/status", async (_req, res) => {
   if (configuredCredentialState === "unreadable") return res.json({ connected: false, credentialState: "unreadable", reason: "credential_unreadable", message: myboxCredentialMessage.unreadable, sync: { ...myboxSyncState } });
   if (!process.env.NAVER_MBOX_TOKEN) return res.json({ connected: false, credentialState: "missing", reason: "token_missing", message: myboxCredentialMessage.missing, sync: { ...myboxSyncState } });
   try { const storage = await mybox.storage(); res.json({ connected: true, credentialState: "available", message: "연결됨", storage, sync: { ...myboxSyncState } }); } catch (error) { res.json({ connected: false, ...publicMyboxError(error), sync: { ...myboxSyncState } }); }
+});
+app.get("/api/mybox/runtime", async (_req, res) => {
+  try {
+    const structure = await findMyboxRuntimeStructure();
+    let manifest = null;
+    let manifestError = null;
+    if (structure?.manifest) {
+      try { manifest = JSON.parse(Buffer.from(await (await mybox.downloadFile(structure.manifest.resourceId)).arrayBuffer()).toString("utf8")); }
+      catch (error) { manifestError = error.message; }
+    }
+    const runtimeComponents = Array.isArray(manifest?.components) ? manifest.components.map((entry) => ({ id: entry.id, version: entry.version })) : [];
+    res.json({ configured: true, path: `${cloudRuntimeRootName}/runtime/${CLOUD_RUNTIME_VERSION_NAME}`, manifestName: CLOUD_RUNTIME_MANIFEST_NAME, manifestError, runtimeComponents, structure: structure ? { root: structure.root, runtime: structure.runtime, version: structure.version, manifest: structure.manifest } : null });
+  } catch (error) { res.status(503).json({ configured: false, error: error.message }); }
 });
 app.get("/api/mybox/backups", async (_req, res) => {
   try {
@@ -538,6 +665,76 @@ const publicDocument = (db, doc) => { const metrics = documentMetrics(db, doc); 
 app.get("/api/jobs", async (_req, res) => { const db = await readDb(); res.json({ jobs: visibleJobs(db.jobs) }); });
 app.get("/api/audit", async (_req, res) => { const db = await readDb(); res.json({ entries: db.audit.slice(0, 40) }); });
 app.post("/api/search", async (req, res) => { const db = await readDb(); const query = expandQuery(db, req.body.query || ""); res.json({ query: query.normalized, expansions: query.expansions, results: search(db, [query.normalized, ...query.expansions].join(" ")) }); });
+app.post("/api/v2/search", async (req, res) => {
+  if (process.env.WEKI_SEARCH_V2 !== "1") return res.status(404).json({ error: "v2 검색이 비활성화되어 있습니다." });
+  try { res.json(await v2Search.search(req.body || {})); } catch (error) { res.status(500).json({ error: "v2 검색에 실패했습니다.", detail: error.message }); }
+});
+app.post("/api/v2/feedback", async (req, res) => {
+  if (process.env.WEKI_SEARCH_V2 !== "1") return res.status(404).json({ error: "v2 검색이 비활성화되어 있습니다." });
+  const body = req.body || {};
+  if (!body.sessionId || !body.resultId || !body.unitId || !body.rankingVersion || typeof body.helpful !== "boolean") return res.status(400).json({ error: "sessionId, resultId, unitId, rank, rankingVersion, helpful이 필요합니다." });
+  try { v2Store.recordFeedback(body); res.status(201).json({ stored: true }); } catch (error) { res.status(400).json({ error: "피드백을 저장할 수 없습니다.", detail: error.message }); }
+});
+app.get("/api/v2/status", async (_req, res) => { res.json({ enabled: v2Enabled, engines: v2Store ? { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health() } : { sqlite: "disabled", fts: "disabled", ann: "disabled", model: "disabled", indexGeneration: null }, rankingVersion: RANKING_VERSION, dataDirectory: v2DataDir }); });
+app.get("/api/runtime/components", async (_req, res) => { res.json(await runtimeStatus()); });
+async function readMyboxRuntimeManifest() {
+  const structure = await findMyboxRuntimeStructure();
+  if (!structure?.manifest) throw new Error("MYBOX wiki/runtime/v1/manifest.json이 없습니다.");
+  let manifest;
+  try { manifest = JSON.parse(Buffer.from(await (await mybox.downloadFile(structure.manifest.resourceId)).arrayBuffer()).toString("utf8")); }
+  catch (error) { throw new Error(`MYBOX runtime manifest를 읽을 수 없습니다: ${error.message}`); }
+  return { structure, manifest };
+}
+function myboxRuntimeSource({ structure, componentId, version }) {
+  return async (url) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "mybox:") return fetch(url);
+    const pathParts = parsed.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+    const requestedComponent = pathParts.shift() || componentId;
+    const requestedVersion = pathParts.shift() || version;
+    const filePath = pathParts.join("/");
+    const resource = await findRuntimeResource(mybox, structure, requestedComponent, requestedVersion, filePath);
+    const response = await mybox.downloadFile(resource.resourceId);
+    return new Response(await response.arrayBuffer(), { status: 200, headers: { "content-type": "application/octet-stream" } });
+  };
+}
+app.post("/api/runtime/components/install", async (req, res) => {
+  const body = req.body || {};
+  try {
+    let manifest = body.manifest;
+    const manifestUrl = body.manifestUrl ? String(body.manifestUrl) : null;
+    let fetchImpl = globalThis.fetch;
+    let baseUrl = manifestUrl;
+    if (body.source === "mybox") {
+      const loaded = await readMyboxRuntimeManifest();
+      manifest = loaded.manifest;
+      const selected = manifest.components?.find((entry) => entry.id === String(body.componentId || ""));
+      if (!selected) throw new Error(`MYBOX runtime component not found: ${body.componentId}`);
+      const version = String(body.version || selected.version);
+      if (version !== selected.version) throw new Error(`MYBOX runtime component version not found: ${body.componentId}@${version}`);
+      // Keep the signed manifest bytes unchanged. The MYBOX transport is a
+      // URL base supplied to the downloader rather than a mutation of each
+      // signed file entry.
+      fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
+      baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;
+    } else if (!manifest && manifestUrl) { const response = await fetch(manifestUrl); if (!response.ok) throw new Error("runtime manifest download failed"); manifest = await response.json(); }
+    if (!manifest && body.componentId === "semantic-model" && body.version === DEFAULT_RUNTIME_MANIFEST.components[0].version) manifest = DEFAULT_RUNTIME_MANIFEST;
+    if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
+    const componentId = String(body.componentId || "");
+    const selectedVersion = String(body.version || manifest.components?.find((entry) => entry.id === componentId)?.version || "");
+    const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl });
+    res.status(201).json({ component, restartRequired: ["semantic-model", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
+  } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
+});
+app.post("/api/runtime/components/:id/retry", async (req, res) => {
+  const body = req.body || {};
+  try {
+    const manifest = body.manifest;
+    if (!manifest || !body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
+    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version: String(body.version), publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY });
+    res.status(201).json({ component, restartRequired: ["semantic-model", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
+  } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
+});
 app.get("/api/synonyms", async (_req, res) => { const db = await readDb(); res.json({ entries: db.synonyms }); });
 app.post("/api/synonyms", async (req, res) => {
   const term = String(req.body?.term || "").trim(); const aliases = [...new Set((req.body?.aliases || []).map((value) => String(value).trim()).filter(Boolean))];
@@ -626,6 +823,7 @@ app.post("/api/storage/migrate", async (req, res) => {
     await fs.writeFile(path.join(staging, "storage-location.json"), JSON.stringify({ format: "weki-storage-location", version: 1, dataDir: resolvedTarget }, null, 2));
     await fs.rename(staging, resolvedTarget);
     if (!updateWindowsStoragePointer(resolvedTarget, currentPath)) throw new Error("새 저장소 위치를 시스템 설정에 기록하지 못했습니다.");
+    v2Store?.close();
     const sourceRemoved = await removeManagedStore(currentPath);
     const sourceCleanupPending = !sourceRemoved && process.platform === "win32" && process.env.WEKI_DESKTOP === "1";
     res.json({ path: resolvedTarget, restartRequired: true, sourceRemoved, sourceCleanupPending });
@@ -633,6 +831,7 @@ app.post("/api/storage/migrate", async (req, res) => {
   catch (error) { await fs.rm(staging, { recursive: true, force: true }).catch(() => {}); res.status(422).json({ error: `저장소 이전에 실패했습니다: ${error.message}` }); }
 });
 app.post("/api/documents", upload.array("files"), async (req, res) => {
+  const requestedMode = req.body.mode || "lightweight"; const modeResolution = processingModeResolution(requestedMode);
   const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서 등록을 시작할 수 없습니다." }); const results = [];
   for (const file of req.files || []) {
     const fileName = normalizeFilename(file.originalname); const ext = path.extname(fileName).slice(1).toLowerCase();
@@ -640,19 +839,19 @@ app.post("/api/documents", upload.array("files"), async (req, res) => {
     const hash = crypto.createHash("sha256").update(file.buffer).digest("hex");
     const existing = db.documents.find((doc) => doc.hash === hash);
     if (existing && ["available", "local_available"].includes(existing.sourceStatus)) {
-      const job = { id: crypto.randomUUID(), kind: "registration", name: fileName, mode: req.body.mode || "lightweight", status: "skipped", progress: 100, detail: "동일 Hash 문서가 이미 등록되어 있습니다.", createdAt: new Date().toISOString(), completedAt: new Date().toISOString() };
+      const job = { id: crypto.randomUUID(), kind: "registration", name: fileName, mode: requestedMode, effectiveMode: modeResolution.effectiveMode, processingModeFallback: modeResolution.fallbackReason, status: "skipped", progress: 100, detail: "동일 Hash 문서가 이미 등록되어 있습니다.", createdAt: new Date().toISOString(), completedAt: new Date().toISOString() };
       db.jobs.unshift(job); results.push({ name: fileName, status: "skipped", jobId: job.id, documentId: existing.id, message: job.detail }); continue;
     }
     if (existing && ["missing", "unavailable", "cloud_available"].includes(existing.sourceStatus)) {
       const now = new Date().toISOString(); const originalName = originalNameOf(existing, normalizeOriginalName(fileName, `${hash}.${ext}`)); const originalKey = documentOriginalKey({ ...existing, originalName }) || `${hash}/${originalName}`; const originalPath = resolveDocumentOriginalPath(dataDir, { ...existing, originalKey });
-      await writeOriginalAtomically(originalPath, file.buffer); existing.originalName ??= originalName; existing.sourceStatus = "local_available"; existing.originalKey = originalKey; delete existing.originalPath;
-      const job = { id: crypto.randomUUID(), kind: "source-relink", name: fileName, mode: req.body.mode || "lightweight", status: "completed", progress: 100, detail: "기존 Document 원본을 자동 재연결했습니다.", documentId: existing.id, createdAt: now, completedAt: now };
+      await writeOriginalAtomically(originalPath, file.buffer); existing.originalName ??= originalName; existing.sourceStatus = "local_available"; existing.originalKey = originalKey; delete existing.originalPath; await syncDocumentToV2(existing);
+      const job = { id: crypto.randomUUID(), kind: "source-relink", name: fileName, mode: requestedMode, effectiveMode: modeResolution.effectiveMode, processingModeFallback: modeResolution.fallbackReason, status: "completed", progress: 100, detail: modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 기존 Document 원본을 자동 재연결했습니다." : "기존 Document 원본을 자동 재연결했습니다.", documentId: existing.id, createdAt: now, completedAt: now };
       db.jobs.unshift(job); results.push({ name: fileName, status: "relinked", jobId: job.id, documentId: existing.id, pages: existing.units.length }); continue;
     }
-    const now = new Date().toISOString(); const job = { id: crypto.randomUUID(), kind: "registration", name: fileName, mode: req.body.mode || "lightweight", status: "queued", progress: 0, detail: "대기열에 추가되었습니다.", hash, ext, size: file.size, modifiedAt: new Date(file.lastModified || Date.now()).toISOString(), createdAt: now };
+    const now = new Date().toISOString(); const job = { id: crypto.randomUUID(), kind: "registration", name: fileName, mode: requestedMode, effectiveMode: modeResolution.effectiveMode, processingModeFallback: modeResolution.fallbackReason, status: "queued", progress: 0, detail: modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 대기열에 추가되었습니다." : "대기열에 추가되었습니다.", hash, ext, size: file.size, modifiedAt: new Date(file.lastModified || Date.now()).toISOString(), createdAt: now };
     job.stagedPath = path.join(incomingDir, `${job.id}.${ext}`); await fs.writeFile(job.stagedPath, file.buffer); db.jobs.unshift(job); results.push({ name: fileName, status: "queued", jobId: job.id, message: job.detail });
   }
-  await writeDb(db); void runQueue(); res.status(202).json({ results });
+  await writeDb(db); void runQueue(); res.status(202).json({ results, processing: { requestedMode, effectiveMode: modeResolution.effectiveMode, fallbackReason: modeResolution.fallbackReason } });
 });
 app.post("/api/documents/:id/reprocess", async (req, res) => {
   const db = await readDb(); const doc = db.documents.find((item) => item.id === req.params.id);
@@ -689,13 +888,13 @@ app.delete("/api/data", async (req, res) => {
   const db = await readDb(); if (activeJobs(db).length || db.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
   if (req.get("x-weki-confirmation") !== "DELETE ALL DOCUMENTS") return res.status(400).json({ error: "확인 문구가 일치하지 않습니다." });
   db.maintenance = { type: "delete-all", startedAt: new Date().toISOString() }; await writeDb(db);
-  try { await fs.rm(originalsDir, { recursive: true, force: true }); await fs.rm(incomingDir, { recursive: true, force: true }); await fs.mkdir(originalsDir, { recursive: true }); await fs.mkdir(incomingDir, { recursive: true }); const cleared = { documents: [], jobs: [], synonyms: db.synonyms, feedback: db.feedback, audit: [{ id: crypto.randomUUID(), type: "delete-all", detail: "all document data deleted", createdAt: new Date().toISOString() }], maintenance: null }; await writeDb(cleared); res.status(204).end(); } catch (error) { db.maintenance = null; await writeDb(db); res.status(500).json({ error: "전체 데이터 삭제에 실패했습니다.", detail: error.message }); }
+  try { await fs.rm(originalsDir, { recursive: true, force: true }); await fs.rm(incomingDir, { recursive: true, force: true }); await fs.mkdir(originalsDir, { recursive: true }); await fs.mkdir(incomingDir, { recursive: true }); for (const document of db.documents) v2Store?.deleteDocument(document.id); await annIndex?.close(); await fs.rm(path.join(v2DataDir, "ann"), { recursive: true, force: true }); const cleared = { documents: [], jobs: [], synonyms: db.synonyms, feedback: db.feedback, audit: [{ id: crypto.randomUUID(), type: "delete-all", detail: "all document data deleted", createdAt: new Date().toISOString() }], maintenance: null }; await writeDb(cleared); res.status(204).end(); } catch (error) { db.maintenance = null; await writeDb(db); res.status(500).json({ error: "전체 데이터 삭제에 실패했습니다.", detail: error.message }); }
 });
 app.delete("/api/documents/:id", async (req, res) => {
   const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서를 삭제할 수 없습니다." }); const doc = db.documents.find((item) => item.id === req.params.id);
   if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
   if (activeJobs(db).some((job) => job.documentId === doc.id)) return res.status(409).json({ error: "이 문서는 처리 작업이 끝난 뒤 삭제할 수 있습니다." });
-  const result = removeDocumentData(db, doc.id); const remainingHashReferences = result.database.documents.some((item) => item.hash && item.hash === doc.hash); await writeDb(result.database);
+  const result = removeDocumentData(db, doc.id); const remainingHashReferences = result.database.documents.some((item) => item.hash && item.hash === doc.hash); await writeDb(result.database); v2Store?.deleteDocument(doc.id); if (embeddingProvider?.available && annIndex) { try { const generation = await annIndex.build(v2Store.listEmbeddings({ dimension: 384 })); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later registration can rebuild the ANN generation. */ } }
   const originalPath = resolveDocumentOriginalPath(dataDir, doc); if (originalPath && !remainingHashReferences) { await fs.unlink(originalPath).catch(() => {}); await fs.rmdir(path.dirname(originalPath)).catch(() => {}); } res.status(204).end();
 });
 
@@ -703,6 +902,11 @@ const vite = await createViteServer({ root, server: { middlewareMode: true } });
 app.use(vite.middlewares);
 await recoverInterruptedJobs();
 const port = Number(process.env.WEKI_PORT || 5173);
+function closeRuntimeStores() { try { v2Store?.close(); } catch { /* Shutdown should not mask the original signal. */ } }
+process.once("beforeExit", closeRuntimeStores);
+process.once("exit", closeRuntimeStores);
+process.once("SIGTERM", () => { closeRuntimeStores(); process.exit(0); });
+process.once("SIGINT", () => { closeRuntimeStores(); process.exit(0); });
 app.listen(port, "127.0.0.1", () => {
   console.log(`Weki is running at http://127.0.0.1:${port}`);
   void runQueue();

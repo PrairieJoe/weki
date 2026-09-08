@@ -7,6 +7,10 @@ import { normalizeOriginalName } from "./original-storage.mjs";
 export const CLOUD_FOLDER_NAME = "weki";
 export const CLOUD_DATA_FOLDER_NAME = "data";
 export const CLOUD_CATALOG_NAME = "knowledge-base.json";
+export const CLOUD_RUNTIME_ROOT_NAME = "wiki";
+export const CLOUD_RUNTIME_FOLDER_NAME = "runtime";
+export const CLOUD_RUNTIME_VERSION_NAME = "v1";
+export const CLOUD_RUNTIME_MANIFEST_NAME = "manifest.json";
 
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
 const resourceType = (resource) => String(resource?.type || "").toLowerCase();
@@ -31,6 +35,42 @@ export async function findWekiFolderStructure(mybox, { parentId, create = false 
   let data = resources.find((resource) => isFolder(resource, CLOUD_DATA_FOLDER_NAME));
   if (!data && create) data = await mybox.createFolder(CLOUD_DATA_FOLDER_NAME, weki.resourceId);
   return { parentId, weki, data, json: resources.find((resource) => isFile(resource, CLOUD_CATALOG_NAME)), resources, rootResources };
+}
+
+export async function findRuntimeFolderStructure(mybox, { parentId, create = false, rootName = CLOUD_RUNTIME_ROOT_NAME } = {}) {
+  const rootResources = await mybox.listResources({ parentId });
+  let root = rootResources.find((resource) => isFolder(resource, rootName));
+  if (!root && create) root = await mybox.createFolder(rootName, parentId);
+  if (!root) return null;
+  const rootChildren = await mybox.listResources({ parentId: root.resourceId });
+  let runtime = rootChildren.find((resource) => isFolder(resource, CLOUD_RUNTIME_FOLDER_NAME));
+  if (!runtime && create) runtime = await mybox.createFolder(CLOUD_RUNTIME_FOLDER_NAME, root.resourceId);
+  if (!runtime) return { parentId, root, runtime: null, version: null, manifest: null, rootResources, rootChildren, resources: [] };
+  const runtimeChildren = await mybox.listResources({ parentId: runtime.resourceId });
+  let version = runtimeChildren.find((resource) => isFolder(resource, CLOUD_RUNTIME_VERSION_NAME));
+  if (!version && create) version = await mybox.createFolder(CLOUD_RUNTIME_VERSION_NAME, runtime.resourceId);
+  if (!version) return { parentId, root, runtime, version: null, manifest: null, rootResources, rootChildren, runtimeChildren, resources: [] };
+  const resources = await mybox.listResources({ parentId: version.resourceId });
+  return { parentId, root, runtime, version, manifest: resources.find((resource) => isFile(resource, CLOUD_RUNTIME_MANIFEST_NAME)) || null, rootResources, rootChildren, runtimeChildren, resources };
+}
+
+export async function findRuntimeResource(mybox, structure, componentId, version, filePath) {
+  const parts = [componentId, version, ...String(filePath || "").replaceAll("\\", "/").split("/")].filter(Boolean);
+  if (!structure?.version?.resourceId || !parts.length || parts.some((part) => part === "." || part === "..")) throw new Error("MYBOX runtime 파일 경로가 올바르지 않습니다.");
+  let parentId = structure.version.resourceId;
+  for (let index = 0; index < parts.length; index += 1) {
+    const name = parts[index];
+    const resources = await mybox.listResources({ parentId });
+    const resource = resources.find((item) => normalizedName(item.name) === normalizedName(name));
+    if (!resource) throw new Error(`MYBOX runtime 파일이 없습니다: ${parts.join("/")}`);
+    if (index === parts.length - 1) {
+      if (!isFile(resource, name)) throw new Error(`MYBOX runtime 파일이 아닙니다: ${parts.join("/")}`);
+      return resource;
+    }
+    if (!isFolder(resource, name)) throw new Error(`MYBOX runtime 경로가 폴더가 아닙니다: ${parts.slice(0, index + 1).join("/")}`);
+    parentId = resource.resourceId;
+  }
+  throw new Error("MYBOX runtime 파일을 확인할 수 없습니다.");
 }
 
 export async function readCloudCatalog(mybox, structure) {

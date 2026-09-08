@@ -24,6 +24,19 @@ npm run build
 npm run dev
 ```
 
+## v1.0.0 이후 개선사항
+
+`v1.0.0` 태그 이후 현재 `main`에 반영된 개선은 검색 정확도와 원문 근거 추적을 강화하면서도, 선택형 고품질 구성요소가 없는 환경에서는 기존 경량 처리를 유지하는 방향으로 구성되었습니다.
+
+- SQLite FTS5 기반 v2 검색 저장소와 안정적인 cursor 페이지네이션, 검색 세션·결과·사용자 피드백 기록을 추가했습니다.
+- RRF 기반 lexical/semantic 결과 결합, 문서별 중복 근거 제한, 낮은 연관성 결과 표시와 검색 엔진 상태·단계별 timing을 제공합니다.
+- Text/Table/Visual Evidence를 분리하고 페이지·슬라이드 위치, native/OCR 출처, 시각 자산 SHA-256을 보존합니다.
+- Local AI 문서 처리 모드와 semantic model을 선택형 runtime pack으로 연결했습니다. 모델이 설치되지 않은 경우 요청을 자동으로 경량 처리로 전환하고 이유를 작업 상태에 남깁니다.
+- document-renderer를 선택형 runtime pack으로 설치할 수 있으며, 파일 크기·SHA-256·Ed25519 서명·앱 호환성을 검증하고 실패 시 atomic promotion을 하지 않습니다.
+- MYBOX token을 Windows 보안 저장소 기반 암호화 파일로 관리하고, 검색 카탈로그 동기화와 원본 지연 복원 및 runtime 배포 경로를 분리했습니다.
+- runtime 설치 진행률, 재시작 안내, 처리 모드·semantic 색인 상태를 설정 화면과 API에서 확인할 수 있습니다.
+- 관련 설계·운영 문서는 [vNext 1단계 검색 문서](./docs/WEKI_VNEXT_STAGE1.md), [vNext 2단계 구성요소 문서](./docs/WEKI_VNEXT_STAGE2.md), [변경 이력](./docs/CHANGELOG.md)에서 확인할 수 있습니다.
+
 데스크톱 창으로 실행하려면 다음 명령을 사용합니다.
 
 ```powershell
@@ -48,7 +61,7 @@ npm run desktop
 
 - DOCX/HWPX/HWP의 시각 요소는 아직 전체 페이지 렌더링 OCR이 아니라 추출 가능한 원문 텍스트 중심입니다.
 - HWP는 파서가 지원하는 HWP 5.x 구조에 한정됩니다.
-- 문서 등록의 `Local AI 허용`과 `External AI 허용`은 아직 준비 중이며, v1에서는 `경량 처리만`을 사용합니다. 외부 AI Provider 연동과 생성형 요약은 아직 제공하지 않습니다.
+- 문서 등록의 `Local AI 허용`은 semantic model runtime pack이 설치된 환경에서 사용할 수 있습니다. 모델이 없으면 경량 처리로 자동 전환합니다. `External AI 허용`, 외부 AI Provider 연동과 생성형 요약은 아직 제공하지 않습니다.
 - MYBOX는 `weki/knowledge-base.json`을 검색 DB로 동기화하고, 원본은 `원본 열기` 시 필요한 파일만 지연 다운로드하는 평문 구조입니다. 원본 포함 업로드 전 경고를 확인해야 합니다. MYBOX 토큰은 설치 시 또는 앱 설정에서 입력하고 선택한 데이터 저장소의 `credentials/mybox-token.json`에 Windows 보안 저장소로 암호화합니다.
 - MYBOX 원본은 `weki/data/<파일 Hash>/<원본 파일명>`에 저장합니다. `knowledge-base.json`은 `data/<파일 Hash>/<원본 파일명>`만 참조하며, 기존 flat/root `data` 구조와 단일 `.weki` 파일은 자동 호환·이동·삭제하지 않습니다.
 - 로컬 문서가 새로 생성된 빈 상태에서 토큰이 있으면 최초 1회만 `knowledge-base.json`을 자동 동기화합니다. 이후 동기화는 설정 화면의 `MYBOX 검색 DB 동기화` 버튼으로만 실행하며, 로컬 삭제는 MYBOX에 전파하지 않습니다.

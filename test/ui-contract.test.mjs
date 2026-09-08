@@ -244,9 +244,47 @@ test("Weki keeps a removable current registration file selection", () => {
 });
 
 test("Weki disables unfinished AI controls while keeping lightweight processing available", () => {
-  assert.match(main, /input\.disabled\s*=\s*true/);
-  assert.match(main, /value\s*!==\s*["']lightweight["']/);
+  assert.match(main, /semanticReady/);
+  assert.match(main, /semanticHealth/);
+  assert.match(main, /local-ai/);
+  assert.match(main, /모델 설치 후/);
   assert.match(main, /aria-disabled/);
-  assert.match(main, /준비 중/);
   assert.match(styles, /\.disabled/);
+});
+
+test("Weki exposes runtime status, install progress and a restart action", () => {
+  assert.match(server, /document-renderer/);
+  assert.match(server, /completedFiles/);
+  assert.match(main, /runtime-components-card/);
+  assert.match(main, /다운로드 중/);
+  assert.match(main, /id="restart-app"/);
+  assert.doesNotMatch(main, /id="restart-app-runtime"/);
+  assert.match(main, /우측 상단.*앱 다시 시작/);
+  assert.match(preload, /weki:restart/);
+  assert.match(electronMain, /weki:restart/);
+  assert.doesNotMatch(server, /\/api\/mybox\/runtime\/prepare/);
+  assert.doesNotMatch(main, /prepare-mybox-runtime/);
+  assert.match(server, /source === "mybox"/);
+  assert.match(server, /baseUrl = `mybox:\/\/runtime/);
+  assert.doesNotMatch(server, /for \(const file of component\.files\) file\.url/);
+  assert.match(server, /restartRequired: \["semantic-model", "document-renderer"\]\.includes\(component\.id\)/);
+  assert.match(main, /install-mybox-renderer/);
+  assert.match(server, /runtimeComponents/);
+  assert.match(main, /runtime\.runtimeComponents/);
+  assert.match(main, /myboxRuntimePromise/);
+  assert.match(main, /myboxRuntimeFetchedAt/);
+  assert.match(main, /myboxRendererInstalling/);
+  assert.match(main, /MYBOX_RUNTIME_CACHE_TTL/);
+  assert.match(main, /manifest가 아직 게시되지 않았습니다/);
+});
+
+test("Weki records the effective analysis mode and semantic indexing stage", () => {
+  assert.match(server, /effectiveProcessingMode/);
+  assert.match(server, /processingModeResolution/);
+  assert.match(server, /semantic_model_unavailable/);
+  assert.match(server, /processingModeFallback/);
+  assert.match(server, /advancedAnalysis/);
+  assert.match(server, /semanticAnalysisStatus/);
+  assert.match(server, /Local AI.*의미 색인 완료/);
+  assert.match(main, /Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다/);
 });

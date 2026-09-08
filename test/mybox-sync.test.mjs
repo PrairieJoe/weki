@@ -8,6 +8,8 @@ import path from "node:path";
 import {
   cloudOriginalPath,
   downloadCloudOriginal,
+  findRuntimeResource,
+  findRuntimeFolderStructure,
   findWekiFolderStructure,
   mergeCloudCatalog,
   readCloudCatalog,
@@ -138,4 +140,42 @@ test("initial synchronization is limited to a newly created empty store with a t
   assert.equal(shouldRunInitialMyboxSync({ newlyCreated: false, documentCount: 0, hasToken: true }), false);
   assert.equal(shouldRunInitialMyboxSync({ newlyCreated: true, documentCount: 1, hasToken: true }), false);
   assert.equal(shouldRunInitialMyboxSync({ newlyCreated: true, documentCount: 0, hasToken: false }), false);
+});
+
+test("runtime packs use a separate wiki/runtime/v1 MYBOX tree", async () => {
+  const calls = [];
+  const resources = new Map([
+    ["root", []],
+    ["wiki-id", []],
+    ["runtime-id", []],
+    ["v1-id", []],
+  ]);
+  const client = {
+    async listResources({ parentId } = {}) { calls.push(["list", parentId || "root"]); return resources.get(parentId || "root") || []; },
+    async createFolder(name, parentId) {
+      calls.push(["create", name, parentId || "root"]);
+      const id = `${name}-id`;
+      const item = { resourceId: id, name, type: "folder" };
+      resources.get(parentId || "root").push(item);
+      resources.set(id, []);
+      return item;
+    },
+  };
+  const structure = await findRuntimeFolderStructure(client, { create: true });
+  assert.equal(structure.root.name, "wiki");
+  assert.equal(structure.runtime.name, "runtime");
+  assert.equal(structure.version.name, "v1");
+  assert.equal(structure.manifest, null);
+  assert.deepEqual(calls.filter(([type]) => type === "create").map(([, name]) => name), ["wiki", "runtime", "v1"]);
+});
+
+test("runtime payload resources resolve by component/version/path", async () => {
+  const resources = new Map([
+    ["v1-id", [{ resourceId: "component-id", name: "document-renderer", type: "folder" }]],
+    ["component-id", [{ resourceId: "version-id", name: "1.0.0", type: "folder" }]],
+    ["version-id", [{ resourceId: "binary-id", name: "soffice.bin", type: "file" }]],
+  ]);
+  const client = { async listResources({ parentId }) { return resources.get(parentId) || []; } };
+  const resource = await findRuntimeResource(client, { version: { resourceId: "v1-id" } }, "document-renderer", "1.0.0", "soffice.bin");
+  assert.equal(resource.resourceId, "binary-id");
 });

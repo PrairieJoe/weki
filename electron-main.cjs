@@ -189,6 +189,11 @@ ipcMain.handle('weki:clear-mybox-token', async () => {
   const applied = await restartOwnedServer();
   return { ok: true, state: 'missing', applied };
 });
+ipcMain.handle('weki:restart', () => {
+  app.relaunch();
+  app.exit(0);
+  return { ok: true };
+});
 app.whenReady().then(async () => {
   if (grantStorageTarget) { app.exit(grantStorageAccess(grantStorageTarget) ? 0 : 1); return; }
   const storage = await import('./src/server/storage.mjs');
@@ -220,7 +225,7 @@ app.whenReady().then(async () => {
   if (app.isPackaged && pendingCleanupRoot && cleanupManagedStorageRoot(pendingCleanupRoot, electronDataDir)) deleteRegistryValue('PendingCleanupRoot');
   if (app.isPackaged && !process.env.WEKI_DATA_DIR) rememberStorageRoot(electronDataDir);
   if (!(await serverIsReady())) {
-    activeServerEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WEKI_DESKTOP: '1', WEKI_DISABLE_ENV_FILE: app.isPackaged ? '1' : '0', WEKI_DATA_DIR: electronDataDir, WEKI_CONFIG_PATH: path.join(electronDataDir, 'storage-location.json'), WEKI_MYBOX_CREDENTIAL_STATE: myboxCredentialState.state, WEKI_PORT: String(appPort) };
+    activeServerEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WEKI_DESKTOP: '1', WEKI_DISABLE_ENV_FILE: app.isPackaged ? '1' : '0', WEKI_SEARCH_V2: process.env.WEKI_SEARCH_V2 || (app.isPackaged ? '1' : '0'), WEKI_DATA_DIR: electronDataDir, WEKI_CONFIG_PATH: path.join(electronDataDir, 'storage-location.json'), WEKI_MYBOX_CREDENTIAL_STATE: myboxCredentialState.state, WEKI_PORT: String(appPort) };
     delete activeServerEnv.WEKI_ENV_FILE;
     if (myboxCredentialState.token) activeServerEnv.NAVER_MBOX_TOKEN = myboxCredentialState.token;
     else delete activeServerEnv.NAVER_MBOX_TOKEN;
