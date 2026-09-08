@@ -11,6 +11,7 @@ dist/
 /release-final/
 /release-final*/
 /release-vnext/
+/release-v*/
 /release/*.exe
 /release/*.blockmap
 /release/win-unpacked/
