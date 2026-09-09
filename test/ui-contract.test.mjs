@@ -372,7 +372,7 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(server, /source === "mybox"/);
   assert.match(server, /baseUrl = `mybox:\/\/runtime/);
   assert.doesNotMatch(server, /for \(const file of component\.files\) file\.url/);
-  assert.match(server, /restartRequired: \["semantic-model", "document-renderer"\]\.includes\(component\.id\)/);
+  assert.match(server, /restartRequired: \["semantic-model", "semantic-reranker", "document-renderer"\]\.includes\(component\.id\)/);
   assert.match(main, /document-renderer-install-slot/);
   assert.doesNotMatch(main, /id="install-mybox-renderer"/);
   assert.match(server, /runtimeComponents/);
