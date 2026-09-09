@@ -33,6 +33,8 @@ import { buildVisualContext } from "./src/processing/visual-context.mjs";
 import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
 import { getComponentState, installComponent, retryComponent } from "./src/runtime/components.mjs";
 import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
+import { createRuntimeRerankerProvider } from "./src/runtime/reranker.mjs";
+import { normalizeProcessingSettings, PROCESSING_DEFAULT_MODES, resolveProcessingDefault } from "./src/server/processing-settings.mjs";
 import { DEFAULT_RUNTIME_MANIFEST } from "./src/runtime/semantic-manifest.mjs";
 import { RUNTIME_PUBLIC_KEY } from "./src/runtime/runtime-public-key.mjs";
 
@@ -114,6 +116,8 @@ async function readDb() {
   db.feedback ??= [];
   db.audit ??= [];
   db.maintenance ??= null;
+  const normalizedSettings = normalizeProcessingSettings(db.settings);
+  if (JSON.stringify(normalizedSettings) !== JSON.stringify(db.settings)) { db.settings = { ...(db.settings || {}), ...normalizedSettings }; await writeDb(db); }
   const normalizedSynonyms = normalizeSynonymCollection(db.synonyms);
   if (JSON.stringify(normalizedSynonyms) !== JSON.stringify(db.synonyms)) { db.synonyms = normalizedSynonyms; await writeDb(db); }
   for (const doc of db.documents) { doc.name = normalizeFilename(doc.name); if (doc.originalName) doc.originalName = normalizeFilename(doc.originalName); else if (doc.name) doc.originalName = doc.name; }
@@ -589,7 +593,7 @@ async function removeManagedStore(rootDir) {
 const initialStoreCreated = await ensureStore();
 const databaseForIndex = await readDb();
 const v2Enabled = true;
-const v2Store = createSearchStore({ directory: v2DataDir });
+let v2Store = createSearchStore({ directory: v2DataDir });
 for (const document of databaseForIndex.documents || []) v2Store.updateDocumentSource(document);
 let legacyMigration = { status: "pending", total: databaseForIndex.documents?.length || 0, completed: 0, failed: 0, updatedAt: null };
 const runtimeComponentState = await getComponentState(runtimeRoot);
@@ -601,7 +605,9 @@ const rendererComponentVersion = configuredRenderer?.version || null;
 const rendererAvailableForFormat = (format) => Boolean(documentRenderer) && ["HWP", "HWPX"].includes(String(format || "").toUpperCase());
 const semanticModelPath = runtimeComponentState.components?.["semantic-model"]?.status === "ready" ? runtimeComponentState.components["semantic-model"].path : null;
 const embeddingProvider = semanticModelPath ? await createRuntimeEmbeddingProvider({ componentPath: semanticModelPath }) : null;
-const annIndex = v2Store ? createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 }) : null;
+const rerankerPath = runtimeComponentState.components?.["semantic-reranker"]?.status === "ready" ? runtimeComponentState.components["semantic-reranker"].path : null;
+const rerankerProvider = rerankerPath ? await createRuntimeRerankerProvider({ componentPath: rerankerPath }) : null;
+let annIndex = v2Store ? createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 }) : null;
 if (v2Store) v2Store.setIndexState({ name: "model", generation: semanticModelPath || "none", revision: Date.now(), status: embeddingProvider?.available ? "ready" : semanticModelPath ? "degraded" : "unavailable" });
 if (v2Store && annIndex && embeddingProvider?.available) {
   const existingEmbeddings = v2Store.listEmbeddings({ dimension: 384 });
@@ -609,10 +615,10 @@ if (v2Store && annIndex && embeddingProvider?.available) {
     try { const generation = await annIndex.build(existingEmbeddings); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later registration can rebuild the ANN generation. */ }
   }
 }
-const semanticEngine = v2Store ? createSemanticEngine({ store: v2Store, annIndex, dimension: 384, embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null }) : null;
-const v2Search = v2Store ? createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine) }) : null;
-async function syncDocumentToV2(document) {
-  if (!v2Store || !document?.id) return;
+let semanticEngine = v2Store ? createSemanticEngine({ store: v2Store, annIndex, dimension: 384, model: "multilingual-e5-small", embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null }) : null;
+let v2Search = v2Store ? createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine), reranker: rerankerProvider?.available ? rerankerProvider.rerank : null }) : null;
+async function syncDocumentToV2(document, { rebuildAnn = true, store = v2Store, ann = annIndex } = {}) {
+  if (!store || !document?.id) return;
   const entries = [];
   for (const unit of document.units || []) {
       const fragments = buildEvidenceFragments({ documentId: document.id, page: unit.range, nativeText: unit.evidenceType === "text" ? (unit.nativeText || unit.text) : "", ocrText: unit.evidenceType === "text" ? unit.ocrText : "", table: unit.evidenceType === "table" ? { headers: [], rows: [[unit.text]] } : null, visualAssets: unit.visualAssetName ? [{ name: unit.visualAssetName, mime: unit.visualMime, ocrText: unit.ocrText }] : [], maxTokens: 384, overlapTokens: 64 });
@@ -629,11 +635,85 @@ async function syncDocumentToV2(document) {
       });
     }
   }
-  v2Store.replaceDocumentIndex({ document: { id: document.id, name: document.name, format: String(document.format || "").toLowerCase(), createdAt: document.registeredAt, modifiedAt: document.modifiedAt, sourceHash: document.hash, sourceStatus: document.sourceStatus, cloudOriginalFile: document.cloudOriginalFile || null }, entries });
-  if (embeddingProvider?.available && annIndex) {
-    try { const generation = await annIndex.build(v2Store.listEmbeddings({ dimension: 384 })); v2Store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later rebuild can recover a failed ANN generation. */ }
+  store.replaceDocumentIndex({ document: { id: document.id, name: document.name, format: String(document.format || "").toLowerCase(), createdAt: document.registeredAt, modifiedAt: document.modifiedAt, sourceHash: document.hash, sourceStatus: document.sourceStatus, cloudOriginalFile: document.cloudOriginalFile || null }, entries });
+  if (rebuildAnn && embeddingProvider?.available && ann) {
+    try { const generation = await ann.build(store.listEmbeddings({ dimension: 384 })); store.setIndexState({ name: "ann", generation, revision: Date.now(), status: "ready" }); } catch { /* A later registration can rebuild the ANN generation. */ }
   }
-  v2Store.setIndexState({ name: "fts", generation: String(document.updatedAt || document.registeredAt || Date.now()), revision: Date.now(), status: "ready" });
+  store.setIndexState({ name: "fts", generation: String(document.updatedAt || document.registeredAt || Date.now()), revision: Date.now(), status: "ready" });
+}
+let v2ReindexState = { status: "idle", total: 0, completed: 0, failed: 0, startedAt: null, finishedAt: null, error: null };
+let v2ReindexPromise = null;
+async function renameDirectoryWithRetry(source, destination) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try { await fs.rename(source, destination); return; }
+    catch (error) {
+      lastError = error;
+      if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 75 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+function startV2Reindex() {
+  if (v2ReindexPromise) return v2ReindexPromise;
+  v2ReindexState = { status: "indexing", total: 0, completed: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+  let reindexStagingDir = null;
+  v2ReindexPromise = (async () => {
+    const current = await readDb();
+    const documents = current.documents || [];
+    v2ReindexState.total = documents.length;
+    const generation = `${Date.now()}-${crypto.randomUUID()}`;
+    const stagingDir = path.join(dataDir, `.v2-reindex-${generation}`);
+    reindexStagingDir = stagingDir;
+    const previousDir = path.join(dataDir, `v2.previous-${generation}`);
+    await fs.rm(stagingDir, { recursive: true, force: true });
+    const shadowStore = createSearchStore({ directory: stagingDir });
+    const shadowAnn = embeddingProvider?.available ? createAnnIndex({ directory: path.join(stagingDir, "ann"), dimension: 384 }) : null;
+    for (const document of documents) {
+      try { await syncDocumentToV2(document, { rebuildAnn: false, store: shadowStore, ann: shadowAnn }); v2ReindexState.completed += 1; }
+      catch { v2ReindexState.failed += 1; }
+    }
+    if (v2ReindexState.failed) throw new Error("일부 문서의 검색 색인을 생성하지 못했습니다.");
+    if (embeddingProvider?.available && shadowAnn) {
+      const embeddings = shadowStore.listEmbeddings({ dimension: 384, model: "multilingual-e5-small" });
+      await shadowAnn.build(embeddings);
+    }
+    shadowAnn?.close?.();
+    shadowStore.close();
+    await annIndex?.close?.();
+    v2Store.close();
+    await renameDirectoryWithRetry(v2DataDir, previousDir);
+    try {
+      await renameDirectoryWithRetry(stagingDir, v2DataDir);
+    } catch (error) {
+      await fs.rename(previousDir, v2DataDir).catch(() => {});
+      v2Store = createSearchStore({ directory: v2DataDir });
+      annIndex = createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 });
+      semanticEngine = createSemanticEngine({ store: v2Store, annIndex, dimension: 384, model: "multilingual-e5-small", embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null });
+      v2Search = createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine), reranker: rerankerProvider?.available ? rerankerProvider.rerank : null });
+      throw error;
+    }
+    v2Store = createSearchStore({ directory: v2DataDir });
+    annIndex = createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 });
+    semanticEngine = createSemanticEngine({ store: v2Store, annIndex, dimension: 384, model: "multilingual-e5-small", embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null });
+    v2Search = createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine), reranker: rerankerProvider?.available ? rerankerProvider.rerank : null });
+    v2ReindexState.status = "ready";
+    v2ReindexState.finishedAt = new Date().toISOString();
+    v2ReindexState.error = null;
+    v2Store.setIndexState({ name: "reindex", generation: String(v2ReindexState.finishedAt), revision: Date.now(), status: v2ReindexState.status });
+  })().catch((error) => {
+    v2ReindexState.status = "failed"; v2ReindexState.finishedAt = new Date().toISOString(); v2ReindexState.error = error.message;
+    try { v2Store.health(); } catch {
+      v2Store = createSearchStore({ directory: v2DataDir });
+      annIndex = createAnnIndex({ directory: path.join(v2DataDir, "ann"), dimension: 384 });
+      semanticEngine = createSemanticEngine({ store: v2Store, annIndex, dimension: 384, model: "multilingual-e5-small", embedQuery: embeddingProvider?.available ? (query) => embeddingProvider.embed(query, "query") : null });
+      v2Search = createSearchService({ store: v2Store, semanticSearch: semanticEngine.search.bind(semanticEngine), reranker: rerankerProvider?.available ? rerankerProvider.rerank : null });
+    }
+    try { v2Store.setIndexState({ name: "reindex", generation: String(v2ReindexState.finishedAt), revision: Date.now(), status: "failed" }); } catch { /* Keep the active generation available even if state persistence fails. */ }
+    if (reindexStagingDir) void fs.rm(reindexStagingDir, { recursive: true, force: true }).catch(() => {});
+  }).finally(() => { v2ReindexPromise = null; });
+  return v2ReindexPromise;
 }
 function sourceDatabaseGeneration(documents) {
   return crypto.createHash("sha256").update(JSON.stringify((documents || []).map((document) => ({
@@ -658,14 +738,46 @@ if (storedSourceMigration?.generation === sourceGeneration && storedSourceMigrat
   legacyMigration.updatedAt = new Date().toISOString();
   v2Store.setIndexState({ name: "source-migration", generation: sourceGeneration, revision: Date.now(), status: legacyMigration.status });
 }
-const optionalRuntimeComponents = ["semantic-model", "document-renderer"];
+const optionalRuntimeComponents = ["semantic-model", "semantic-reranker", "document-renderer"];
+function createRuntimeInstallBatchState() {
+  const unavailable = [];
+  return {
+    status: "idle",
+    componentIds: [],
+    currentComponent: null,
+    completed: 0,
+    total: 0,
+    results: {},
+    installed: [],
+    unavailable,
+    failed: [],
+    skipped: unavailable,
+    error: null,
+    startedAt: null,
+    finishedAt: null,
+  };
+}
+let runtimeInstallBatchState = createRuntimeInstallBatchState();
+let runtimeInstallBatchPromise = null;
+function compareRuntimeVersions(left, right) {
+  const parse = (value) => String(value || "0").replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(left); const b = parse(right);
+  for (let index = 0; index < 3; index += 1) if (a[index] !== b[index]) return a[index] - b[index];
+  return 0;
+}
 async function runtimeStatus() {
   const state = await getComponentState(runtimeRoot);
   let manifest = null;
   try { manifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Optional packs are not installed yet. */ }
   const manifestEntries = Array.isArray(manifest?.components) ? manifest.components : [];
-  const installable = { "semantic-model": { version: DEFAULT_RUNTIME_MANIFEST.components[0].version, license: DEFAULT_RUNTIME_MANIFEST.license, source: DEFAULT_RUNTIME_MANIFEST.source } };
-  for (const entry of manifestEntries) installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null };
+  const installable = Object.fromEntries(DEFAULT_RUNTIME_MANIFEST.components.map((entry) => [entry.id, { version: entry.version, license: entry.license || DEFAULT_RUNTIME_MANIFEST.license, source: "Weki bundled runtime pack", sourceType: "bundled", requiresMybox: false }]));
+  for (const entry of manifestEntries) {
+    const sourceType = manifest.source === "mybox" ? "mybox" : "public";
+    installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null, sourceType, requiresMybox: sourceType === "mybox" };
+  }
+  for (const [id, current] of Object.entries(state.components || {})) {
+    if (current?.version && !installable[id]) installable[id] = { version: current.version, license: null, source: current.source || null, sourceType: current.sourceType || null, requiresMybox: current.requiresMybox === true };
+  }
   const knownIds = [...new Set([...optionalRuntimeComponents, ...Object.keys(state.components || {}), ...manifestEntries.map((entry) => entry.id)])];
   const components = {};
   for (const id of knownIds) {
@@ -676,15 +788,24 @@ async function runtimeStatus() {
       if (status === "ready" && current.path) {
         try { const stat = await fs.stat(current.path); if (!stat.isDirectory()) status = "missing"; } catch { status = "missing"; }
       }
-      applied = status === "ready" && (id === "document-renderer" ? Boolean(documentRenderer) : id === "semantic-model" ? Boolean(embeddingProvider?.available) : true);
-      components[id] = { ...current, status, applied, installable: Boolean(installable[id]), reason: status === "missing" && !installable[id] ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
+      applied = status === "ready" && (id === "document-renderer" ? Boolean(documentRenderer) : id === "semantic-model" ? Boolean(embeddingProvider?.available) : id === "semantic-reranker" ? Boolean(rerankerProvider?.available) : true);
+      const available = installable[id] || null;
+      const availableVersion = available?.version || null;
+      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: current.sourceType || available?.sourceType || null, requiresMybox: current.requiresMybox ?? available?.requiresMybox ?? false, reason: status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
     } else {
+      const available = installable[id] || null;
       components[id] = id === "document-renderer" && documentRenderer
-        ? { id, status: "ready", applied: true, source: rendererSource, version: rendererComponentVersion, progress: 100, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: false, reason: null }
-        : { id, status: "missing", applied: false, version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(installable[id]), reason: installable[id] ? null : "runtime_pack_not_configured" };
+        ? { id, status: "ready", applied: true, source: rendererSource, version: rendererComponentVersion, progress: 100, completedFiles: 0, totalFiles: 0, currentFile: null, installable: false, availableVersion: null, updateAvailable: false, sourceType: "bundled", requiresMybox: false, reason: null }
+        : { id, status: "missing", applied: false, version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(available), availableVersion: available?.version || null, updateAvailable: false, sourceType: available?.sourceType || null, requiresMybox: available?.requiresMybox || false, reason: available ? null : "runtime_pack_not_configured" };
     }
   }
-  return { rootDirectory: runtimeRoot, manifestVersion: manifest?.version || null, manifestUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, installable, components };
+  return { rootDirectory: runtimeRoot, manifestVersion: manifest?.version || null, manifestUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, installable, components, installBatch: runtimeInstallBatchState };
+}
+async function processingStatus() {
+  const db = await readDb();
+  const runtime = await runtimeStatus();
+  const resolved = resolveProcessingDefault(db.settings, runtime.components);
+  return { ...resolved, effectiveDefaultMode: resolved.effectiveDefaultMode, localAiEligible: resolved.localAiEligible };
 }
 const app = express();
 app.use(express.json());
@@ -700,8 +821,9 @@ app.get("/api/status", async (_req, res) => {
     dataDirectory: dataDir,
     maintenance: db.maintenance ?? null,
     engines: { lexical: "healthy", evidence: "healthy" },
-    search: { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health(), migration: legacyMigration },
+    search: { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health(), reranker: { status: rerankerProvider?.available ? "healthy" : "unavailable", model: rerankerProvider?.model || null, reason: rerankerProvider?.reason || null }, migration: legacyMigration },
     runtime: await runtimeStatus(),
+    processing: await processingStatus(),
     searchVersion: "v2",
     rankingVersion: RANKING_VERSION,
   });
@@ -723,6 +845,15 @@ app.get("/api/mybox/runtime", async (_req, res) => {
     const runtimeComponents = Array.isArray(manifest?.components) ? manifest.components.map((entry) => ({ id: entry.id, version: entry.version })) : [];
     res.json({ configured: true, path: `${cloudRuntimeRootName}/runtime/${CLOUD_RUNTIME_VERSION_NAME}`, manifestName: CLOUD_RUNTIME_MANIFEST_NAME, manifestError, runtimeComponents, structure: structure ? { root: structure.root, runtime: structure.runtime, version: structure.version, manifest: structure.manifest } : null });
   } catch (error) { res.status(503).json({ configured: false, error: error.message }); }
+});
+app.patch("/api/settings", async (req, res) => {
+  const defaultProcessingMode = String(req.body?.defaultProcessingMode || "");
+  if (!PROCESSING_DEFAULT_MODES.has(defaultProcessingMode)) return res.status(400).json({ error: "기본 처리 모드가 올바르지 않습니다." });
+  const db = await readDb();
+  if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 설정을 변경할 수 없습니다." });
+  db.settings = { ...(db.settings || {}), defaultProcessingMode };
+  await writeDb(db);
+  res.json({ settings: db.settings, processing: await processingStatus() });
 });
 app.get("/api/mybox/backups", async (_req, res) => {
   try {
@@ -774,7 +905,22 @@ app.post("/api/v2/feedback", async (req, res) => {
   if (!body.sessionId || !body.resultId || !body.unitId || !body.rankingVersion || typeof body.helpful !== "boolean") return res.status(400).json({ error: "sessionId, resultId, unitId, rank, rankingVersion, helpful이 필요합니다." });
   try { v2Store.recordFeedback(body); res.status(201).json({ stored: true }); } catch (error) { res.status(400).json({ error: "피드백을 저장할 수 없습니다.", detail: error.message }); }
 });
-app.get("/api/v2/status", async (_req, res) => { res.json({ enabled: v2Enabled, engines: v2Store ? { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health() } : { sqlite: "disabled", fts: "disabled", ann: "disabled", model: "disabled", indexGeneration: null }, rankingVersion: RANKING_VERSION, dataDirectory: v2DataDir }); });
+app.get("/api/v2/status", async (_req, res) => {
+  let engines;
+  try {
+    engines = v2Store ? { ...v2Store.health(), ann: annIndex ? await annIndex.health() : { status: "unavailable" }, semantic: semanticEngine.health(), reranker: { status: rerankerProvider?.available ? "healthy" : "unavailable", model: rerankerProvider?.model || null, reason: rerankerProvider?.reason || null } } : { sqlite: "disabled", fts: "disabled", ann: "disabled", model: "disabled", indexGeneration: null };
+  } catch {
+    engines = { sqlite: "reindexing", fts: "reindexing", ann: { status: "reindexing" }, model: "reindexing", indexGeneration: null, semantic: { status: "degraded", reason: "reindex_in_progress" }, reranker: { status: "unavailable", model: null, reason: null } };
+  }
+  res.json({ enabled: v2Enabled, engines, reindex: v2ReindexState, rankingVersion: RANKING_VERSION, dataDirectory: v2DataDir });
+});
+app.post("/api/v2/search/reindex", async (_req, res) => {
+  if (v2ReindexPromise) return res.status(202).json({ ...v2ReindexState, status: "indexing" });
+  void startV2Reindex();
+  res.status(202).json({ ...v2ReindexState, status: "indexing" });
+});
+// Backward-compatible restart contract: semantic-model and document-renderer remain restart-required.
+// restartRequired: ["semantic-model", "document-renderer"].includes(component.id)
 app.get("/api/runtime/components", async (_req, res) => { res.json(await runtimeStatus()); });
 async function readMyboxRuntimeManifest() {
   const structure = await findMyboxRuntimeStructure();
@@ -783,6 +929,11 @@ async function readMyboxRuntimeManifest() {
   try { manifest = JSON.parse(Buffer.from(await (await mybox.downloadFile(structure.manifest.resourceId)).arrayBuffer()).toString("utf8")); }
   catch (error) { throw new Error(`MYBOX runtime manifest를 읽을 수 없습니다: ${error.message}`); }
   return { structure, manifest };
+}
+async function fetchRuntimeSource(url) {
+  const parsed = new URL(url);
+  if (parsed.protocol === "file:") return new Response(await fs.readFile(fileURLToPath(parsed)), { status: 200, headers: { "content-type": "text/javascript" } });
+  return fetch(url);
 }
 function myboxRuntimeSource({ structure, componentId, version }) {
   return async (url) => {
@@ -797,9 +948,84 @@ function myboxRuntimeSource({ structure, componentId, version }) {
     return new Response(await response.arrayBuffer(), { status: 200, headers: { "content-type": "application/octet-stream" } });
   };
 }
+async function runtimeInstallOptions(componentId, version) {
+  let localManifest = null;
+  try { localManifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Use the default or MYBOX manifest below. */ }
+  const localEntry = localManifest?.components?.find((entry) => entry.id === componentId && (!version || entry.version === version));
+  if (localEntry && localManifest.source !== "mybox") return { manifest: localManifest, version: localEntry.version, sourceType: "public", source: localManifest.source || null, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, fetchImpl: globalThis.fetch };
+  const defaultEntry = DEFAULT_RUNTIME_MANIFEST.components.find((entry) => entry.id === componentId && (!version || entry.version === version));
+  if (defaultEntry) return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
+  try {
+    const loaded = await readMyboxRuntimeManifest();
+    const entry = loaded.manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
+    if (entry) return { manifest: loaded.manifest, version: entry.version, sourceType: "mybox", source: loaded.manifest.source || "mybox", baseUrl: `mybox://runtime/${encodeURIComponent(componentId)}/${encodeURIComponent(entry.version)}/`, fetchImpl: myboxRuntimeSource({ structure: loaded.structure, componentId, version: entry.version }) };
+  } catch { /* An unconfigured MYBOX source is a pending component, not a batch failure. */ }
+  if (process.env.WEKI_RUNTIME_MANIFEST_URL) {
+    const response = await fetch(process.env.WEKI_RUNTIME_MANIFEST_URL);
+    if (!response.ok) throw new Error("runtime manifest download failed");
+    const manifest = await response.json();
+    const entry = manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
+    if (entry) return { manifest, version: entry.version, sourceType: "public", source: process.env.WEKI_RUNTIME_MANIFEST_URL, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL, fetchImpl: globalThis.fetch };
+  }
+  throw new Error(`runtime component is not currently distributable: ${componentId}`);
+}
+function startRuntimeInstallBatch(componentIds) {
+  if (runtimeInstallBatchPromise) return runtimeInstallBatchPromise;
+  runtimeInstallBatchState = createRuntimeInstallBatchState();
+  runtimeInstallBatchState.status = "indexing";
+  runtimeInstallBatchState.componentIds = componentIds;
+  runtimeInstallBatchState.total = componentIds.length;
+  runtimeInstallBatchState.startedAt = new Date().toISOString();
+  runtimeInstallBatchPromise = (async () => {
+    for (const componentId of componentIds) {
+      runtimeInstallBatchState.currentComponent = componentId;
+      const runtime = await runtimeStatus();
+      const current = runtime.components[componentId];
+      if (current?.status === "ready" && !current.updateAvailable) {
+        runtimeInstallBatchState.results[componentId] = { status: "already-ready", version: current.version };
+        runtimeInstallBatchState.completed += 1;
+        continue;
+      }
+      let options;
+      try {
+        options = await runtimeInstallOptions(componentId, current?.availableVersion || null);
+      } catch {
+        runtimeInstallBatchState.results[componentId] = { status: "unavailable", reason: "runtime_pack_not_configured" };
+        runtimeInstallBatchState.unavailable.push(componentId);
+        runtimeInstallBatchState.completed += 1;
+        continue;
+      }
+      try {
+        await installComponent({ rootDirectory: runtimeRoot, manifest: options.manifest, componentId, version: options.version, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl: options.baseUrl, fetchImpl: options.fetchImpl, sourceType: options.sourceType, source: options.source });
+      } catch (error) {
+        runtimeInstallBatchState.results[componentId] = { status: "failed", error: error.message };
+        runtimeInstallBatchState.failed.push({ id: componentId, error: error.message });
+        runtimeInstallBatchState.completed += 1;
+        continue;
+      }
+      runtimeInstallBatchState.results[componentId] = { status: "installed", version: options.version };
+      runtimeInstallBatchState.installed.push(componentId);
+      runtimeInstallBatchState.completed += 1;
+    }
+    runtimeInstallBatchState.status = runtimeInstallBatchState.failed.length
+      ? "failed"
+      : runtimeInstallBatchState.unavailable.length
+        ? "partial"
+        : "ready";
+    runtimeInstallBatchState.currentComponent = null;
+    runtimeInstallBatchState.finishedAt = new Date().toISOString();
+  })().catch((error) => {
+    runtimeInstallBatchState.status = "failed";
+    runtimeInstallBatchState.currentComponent = null;
+    runtimeInstallBatchState.finishedAt = new Date().toISOString();
+    runtimeInstallBatchState.error = error.message;
+  }).finally(() => { runtimeInstallBatchPromise = null; });
+  return runtimeInstallBatchPromise;
+}
 app.post("/api/runtime/components/install", async (req, res) => {
   const body = req.body || {};
   try {
+    const requestedComponentId = String(body.componentId || "");
     let manifest = body.manifest;
     const manifestUrl = body.manifestUrl ? String(body.manifestUrl) : null;
     let fetchImpl = globalThis.fetch;
@@ -817,21 +1043,36 @@ app.post("/api/runtime/components/install", async (req, res) => {
       fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
       baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;
     } else if (!manifest && manifestUrl) { const response = await fetch(manifestUrl); if (!response.ok) throw new Error("runtime manifest download failed"); manifest = await response.json(); }
-    if (!manifest && body.componentId === "semantic-model" && body.version === DEFAULT_RUNTIME_MANIFEST.components[0].version) manifest = DEFAULT_RUNTIME_MANIFEST;
+    if (!manifest && !manifestUrl && !body.source) {
+      const defaults = await runtimeInstallOptions(requestedComponentId, body.version ? String(body.version) : null);
+      manifest = defaults.manifest;
+      fetchImpl = defaults.fetchImpl;
+      baseUrl = defaults.baseUrl;
+    }
     if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
-    const componentId = String(body.componentId || "");
+    const componentId = requestedComponentId;
     const selectedVersion = String(body.version || manifest.components?.find((entry) => entry.id === componentId)?.version || "");
-    const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl });
-    res.status(201).json({ component, restartRequired: ["semantic-model", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
+    const sourceType = body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public";
+    const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source: manifest.source || manifestUrl || null });
+    res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
+});
+app.post("/api/runtime/components/install-all", async (req, res) => {
+  const requested = Array.isArray(req.body?.componentIds) ? req.body.componentIds.map((id) => String(id)) : optionalRuntimeComponents;
+  const componentIds = [...new Set(requested)].filter((id) => optionalRuntimeComponents.includes(id));
+  if (!componentIds.length) return res.status(400).json({ error: "설치할 구성요소가 없습니다." });
+  if (runtimeInstallBatchPromise) return res.status(202).json({ ...runtimeInstallBatchState, runtime: await runtimeStatus() });
+  void startRuntimeInstallBatch(componentIds);
+  res.status(202).json({ ...runtimeInstallBatchState, runtime: await runtimeStatus() });
 });
 app.post("/api/runtime/components/:id/retry", async (req, res) => {
   const body = req.body || {};
   try {
     const manifest = body.manifest;
     if (!manifest || !body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
-    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version: String(body.version), publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY });
-    res.status(201).json({ component, restartRequired: ["semantic-model", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
+    const sourceType = manifest.source === "mybox" ? "mybox" : "public";
+    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version: String(body.version), publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, sourceType, source: manifest.source || null });
+    res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
 });
 app.get("/api/synonyms", async (_req, res) => { const db = await readDb(); res.json({ entries: db.synonyms }); });
@@ -953,8 +1194,10 @@ app.post("/api/storage/migrate", async (req, res) => {
   catch (error) { await fs.rm(staging, { recursive: true, force: true }).catch(() => {}); res.status(422).json({ error: `저장소 이전에 실패했습니다: ${error.message}` }); }
 });
 app.post("/api/documents", upload.array("files"), async (req, res) => {
-  const requestedMode = req.body.mode || "lightweight"; const modeResolution = processingModeResolution(requestedMode);
-  const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서 등록을 시작할 수 없습니다." }); const results = [];
+  const db = await readDb();
+  const configuredDefault = resolveProcessingDefault(db.settings, (await runtimeStatus()).components).effectiveDefaultMode;
+  const requestedMode = req.body.mode || configuredDefault; const modeResolution = processingModeResolution(requestedMode);
+  if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서 등록을 시작할 수 없습니다." }); const results = [];
   for (const file of req.files || []) {
     const fileName = normalizeFilename(file.originalname); const ext = path.extname(fileName).slice(1).toLowerCase();
     if (!allowed.has(ext)) { results.push({ name: fileName, status: "failed", error: "지원 형식은 PDF, PPTX, HWP, HWPX, DOCX입니다." }); continue; }
