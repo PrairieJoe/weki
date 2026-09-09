@@ -215,6 +215,7 @@ function runtimeInstallMetadata(id,entry=state.runtime?.components?.[id]){
   return metadata;
 }
 function runtimeStatusText(entry){
+  if(entry.status==="failed"&&entry.error)return `설치 실패: ${String(entry.error)}`;
   if(entry.status==="ready"&&!entry.applied)return "앱 재시작 필요";
   if(entry.status==="ready"&&entry.updateAvailable)return "업데이트 가능";
   if(entry.status==="missing"&&entry.reason==="runtime_pack_not_configured")return entry.requiresMybox?"MYBOX 배포본 없음":"배포 준비 중";

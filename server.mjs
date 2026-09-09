@@ -772,6 +772,7 @@ async function runtimeStatus() {
   const manifestEntries = Array.isArray(manifest?.components) ? manifest.components : [];
   const installable = Object.fromEntries(DEFAULT_RUNTIME_MANIFEST.components.map((entry) => [entry.id, { version: entry.version, license: entry.license || DEFAULT_RUNTIME_MANIFEST.license, source: "Weki bundled runtime pack", sourceType: "bundled", requiresMybox: false }]));
   for (const entry of manifestEntries) {
+    if (entry.id === "document-renderer" && manifest.source !== "mybox") continue;
     const sourceType = manifest.source === "mybox" ? "mybox" : "public";
     installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null, sourceType, requiresMybox: sourceType === "mybox" };
   }
@@ -790,13 +791,15 @@ async function runtimeStatus() {
       }
       applied = status === "ready" && (id === "document-renderer" ? Boolean(documentRenderer) : id === "semantic-model" ? Boolean(embeddingProvider?.available) : id === "semantic-reranker" ? Boolean(rerankerProvider?.available) : true);
       const available = installable[id] || null;
+      const myboxOnly = id === "document-renderer" && !available;
       const availableVersion = available?.version || null;
-      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: current.sourceType || available?.sourceType || null, requiresMybox: current.requiresMybox ?? available?.requiresMybox ?? false, reason: status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
+      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: current.sourceType || available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: current.requiresMybox ?? available?.requiresMybox ?? myboxOnly, reason: status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
     } else {
       const available = installable[id] || null;
+      const myboxOnly = id === "document-renderer" && !available;
       components[id] = id === "document-renderer" && documentRenderer
         ? { id, status: "ready", applied: true, source: rendererSource, version: rendererComponentVersion, progress: 100, completedFiles: 0, totalFiles: 0, currentFile: null, installable: false, availableVersion: null, updateAvailable: false, sourceType: "bundled", requiresMybox: false, reason: null }
-        : { id, status: "missing", applied: false, version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(available), availableVersion: available?.version || null, updateAvailable: false, sourceType: available?.sourceType || null, requiresMybox: available?.requiresMybox || false, reason: available ? null : "runtime_pack_not_configured" };
+        : { id, status: "missing", applied: false, version: null, progress: 0, completedFiles: 0, totalFiles: 0, bytesDownloaded: 0, totalBytes: 0, currentFile: null, installable: Boolean(available), availableVersion: available?.version || null, updateAvailable: false, sourceType: available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: available?.requiresMybox ?? myboxOnly, reason: available ? null : "runtime_pack_not_configured" };
     }
   }
   return { rootDirectory: runtimeRoot, manifestVersion: manifest?.version || null, manifestUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, installable, components, installBatch: runtimeInstallBatchState };
@@ -1071,11 +1074,23 @@ app.post("/api/runtime/components/install-all", async (req, res) => {
 app.post("/api/runtime/components/:id/retry", async (req, res) => {
   const body = req.body || {};
   try {
-    const manifest = body.manifest;
+    let manifest = body.manifest;
     if (!manifest || !body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
-    if (req.params.id === "document-renderer" && manifest.source !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
-    const sourceType = manifest.source === "mybox" ? "mybox" : "public";
-    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version: String(body.version), publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, sourceType, source: manifest.source || null });
+    const version = String(body.version);
+    let fetchImpl = globalThis.fetch;
+    let baseUrl = null;
+    const sourceType = body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public";
+    if (sourceType === "mybox") {
+      const loaded = await readMyboxRuntimeManifest();
+      manifest = loaded.manifest;
+      const selected = manifest.components?.find((entry) => entry.id === req.params.id);
+      if (!selected) throw new Error(`MYBOX runtime component not found: ${req.params.id}`);
+      if (version !== selected.version) throw new Error(`MYBOX runtime component version not found: ${req.params.id}@${version}`);
+      fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
+      baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;
+    }
+    if (req.params.id === "document-renderer" && sourceType !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
+    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source: manifest.source || null });
     res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
 });

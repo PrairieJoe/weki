@@ -30,13 +30,15 @@ export function runtimeBatchMessage(batch) {
   const unavailable = batch?.unavailable || [];
   const skipped = batch?.skipped || [];
   const failed = batch?.failed || [];
-  const failedLabels = failed.map((entry) => {
+  const failedDetails = failed.map((entry) => {
     const id = typeof entry === "string" ? entry : entry?.id;
-    return componentLabels[id] || id;
+    const label = componentLabels[id] || id;
+    const error = typeof entry === "object" && entry?.error ? String(entry.error).trim() : "";
+    return error ? `${label}: ${error}` : label;
   }).filter(Boolean);
-  if (failedLabels.length || batch?.status === "failed") {
-    return failedLabels.length
-      ? `일부 구성요소 설치에 실패했습니다: ${failedLabels.join(", ")}. 오류 원인을 확인하고 재시도하세요.`
+  if (failedDetails.length || batch?.status === "failed") {
+    return failedDetails.length
+      ? `일부 구성요소 설치에 실패했습니다: ${failedDetails.join(", ")}. 오류 원인을 확인하고 재시도하세요.`
       : batch.error ? `구성요소 설치에 실패했습니다: ${batch.error}` : "구성요소 설치에 실패했습니다.";
   }
   const unavailableLabels = unavailable.map((id) => componentLabels[id] || id);

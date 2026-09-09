@@ -34,7 +34,7 @@ test("runtime batch message explains unavailable components", () => {
   );
   assert.equal(
     runtimeBatchMessage({ status: "failed", failed: [{ id: "semantic-reranker", error: "runtime hash mismatch" }] }),
-    "일부 구성요소 설치에 실패했습니다: 검색 결과 재정렬 모델. 오류 원인을 확인하고 재시도하세요.",
+    "일부 구성요소 설치에 실패했습니다: 검색 결과 재정렬 모델: runtime hash mismatch. 오류 원인을 확인하고 재시도하세요.",
   );
   assert.equal(runtimeBatchMessage({ status: "partial", skipped: ["document-renderer"] }), "문서 화면 처리기는 배포본이 없어 설치하지 못했습니다.");
   assert.equal(runtimeBatchMessage({ status: "ready", installed: ["semantic-reranker"], unavailable: [], failed: [] }), "모든 검색 구성요소 설치가 완료되었습니다.");

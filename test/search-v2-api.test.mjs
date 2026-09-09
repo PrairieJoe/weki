@@ -19,9 +19,9 @@ async function freePort() {
   return port;
 }
 
-async function startServer(dataDir, { searchV2 = "1" } = {}) {
+async function startServer(dataDir, { searchV2 = "1", env: envOverrides = {} } = {}) {
   const port = await freePort();
-  const env = { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_PORT: String(port), WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1", WEKI_DISABLE_ENV_FILE: "1" };
+  const env = { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_PORT: String(port), WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1", WEKI_DISABLE_ENV_FILE: "1", ...envOverrides };
   if (searchV2 !== null) env.WEKI_SEARCH_V2 = searchV2;
   const child = spawn(process.execPath, ["server.mjs"], {
     cwd: projectRoot,
@@ -335,7 +335,10 @@ test("document-renderer install and batch resolution reject public manifests", a
   const base = `http://127.0.0.1:${server.port}`;
 
   const status = await (await fetch(`${base}/api/runtime/components`)).json();
-  assert.equal(status.components["document-renderer"].sourceType, "public");
+  assert.equal(status.components["document-renderer"].sourceType, "mybox");
+  assert.equal(status.components["document-renderer"].requiresMybox, true);
+  assert.equal(status.components["document-renderer"].installable, false);
+  assert.equal(status.installable["document-renderer"], undefined);
   const direct = await fetch(`${base}/api/runtime/components/install`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -472,7 +475,57 @@ test("clean installs keep the document renderer uninstalled until a runtime pack
   const status = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
   assert.equal(status.components["document-renderer"].status, "missing");
   assert.equal(status.components["document-renderer"].applied, false);
+  assert.equal(status.components["document-renderer"].sourceType, "mybox");
+  assert.equal(status.components["document-renderer"].requiresMybox, true);
+  assert.equal(status.components["document-renderer"].installable, false);
   assert.equal(status.components["document-renderer"].reason, "runtime_pack_not_configured");
+});
+
+test("MYBOX renderer retry uses the MYBOX transport for relative runtime files", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-mybox-retry-"));
+  const bytes = Buffer.from("renderer runtime");
+  const manifest = {
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "mybox",
+    components: [{
+      id: "document-renderer",
+      version: "1.0.0",
+      files: [{ path: "renderer.bin", size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") }],
+    }],
+  };
+  let apiBase = "";
+  const provider = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+    if (url.pathname === "/v1/drive/resources") return json({ resources: [{ resourceId: "wiki-id", name: "wiki", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/wiki-id/resources") return json({ resources: [{ resourceId: "runtime-id", name: "runtime", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/runtime-id/resources") return json({ resources: [{ resourceId: "v1-id", name: "v1", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/v1-id/resources") return json({ resources: [{ resourceId: "manifest-id", name: "manifest.json", type: "file" }, { resourceId: "renderer-id", name: "document-renderer", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/renderer-id/resources") return json({ resources: [{ resourceId: "version-id", name: "1.0.0", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/version-id/resources") return json({ resources: [{ resourceId: "renderer-file-id", name: "renderer.bin", type: "file" }] });
+    if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/mock/manifest` });
+    if (url.pathname === "/v1/drive/files/renderer-file-id/download") return json({ downloadUrl: `${apiBase}/mock/renderer` });
+    if (url.pathname === "/v1/mock/manifest") return json(manifest);
+    if (url.pathname === "/v1/mock/renderer") { res.setHeader("Content-Type", "application/octet-stream"); return res.end(bytes); }
+    res.statusCode = 404;
+    return res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  apiBase = `http://127.0.0.1:${provider.address().port}/v1`;
+  const server = await startServer(dataDir, { env: { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: apiBase } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "mybox", manifest, version: "1.0.0" }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal(body.component.status, "ready");
+  assert.deepEqual(await fs.readFile(path.join(dataDir, "runtime", "v1", "document-renderer", "1.0.0", "renderer.bin")), bytes);
 });
 
 test("default runtime catalog installs the bundled semantic reranker pack", async (t) => {

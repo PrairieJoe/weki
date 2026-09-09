@@ -1,5 +1,11 @@
-// Development/default manifest for the official MIT-licensed E5 ONNX pack.
-// Production builds should replace this with a CI-signed manifest and public key.
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+// Development/default manifest for the official MIT-licensed E5 ONNX pack and
+// the locally shipped Weki reranker pack. Production builds should replace
+// this with a CI-signed manifest and public key.
+const root = path.dirname(fileURLToPath(import.meta.url));
+const rerankerPack = path.join(root, "packs", "semantic-reranker", "1.0.0", "reranker.mjs");
 export const DEFAULT_SEMANTIC_COMPONENT = {
   id: "semantic-model",
   version: "1.0.0",
@@ -44,5 +50,18 @@ export const DEFAULT_RUNTIME_MANIFEST = {
   appCompatibility: ">=1.0.0",
   license: "MIT",
   source: "https://huggingface.co/intfloat/multilingual-e5-small",
-  components: [DEFAULT_SEMANTIC_COMPONENT],
+  components: [
+    DEFAULT_SEMANTIC_COMPONENT,
+    {
+      id: "semantic-reranker",
+      version: "1.0.0",
+      license: "MIT",
+      files: [{
+        path: "reranker.mjs",
+        url: pathToFileURL(rerankerPack).href,
+        size: 982,
+        sha256: "31db99da8c2d7c8a1df461ffe652fe2e29d14505a455edbbe6cd5364686e842e",
+      }],
+    },
+  ],
 };
