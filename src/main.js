@@ -204,11 +204,15 @@ function syncAdvancedBackupCard(){
   card.append(body);
   toggle.addEventListener("click",()=>{body.hidden=!body.hidden;toggle.textContent=body.hidden?"고급 관리 열기":"고급 관리 닫기";});
 }
-function runtimeInstallMetadata(id){
+function runtimeInstallMetadata(id,entry=state.runtime?.components?.[id]){
   const local=state.runtime?.installable?.[id];
-  if(local)return local;
-  const remote=state.myboxRuntime?.data?.runtimeComponents?.find((entry)=>entry?.id===id);
-  return remote?{version:remote.version,sourceType:"mybox",requiresMybox:true}:null;
+  const remote=state.myboxRuntime?.data?.runtimeComponents?.find((item)=>item?.id===id);
+  const base=local|| (remote?{version:remote.version,sourceType:"mybox",requiresMybox:true}:null);
+  const componentSourceType=entry?.sourceType||(entry?.requiresMybox?"mybox":null);
+  const version=entry?.version||entry?.availableVersion||base?.version;
+  const metadata=base||version||componentSourceType?{...base,...(version?{version}:{}),...(componentSourceType?{sourceType:componentSourceType}:{}),...(entry?.requiresMybox||componentSourceType==="mybox"?{requiresMybox:true}:{}),...(entry?.source?{source:entry.source}:{})}:null;
+  if(id==="document-renderer"&&metadata?.sourceType!=="mybox")return null;
+  return metadata;
 }
 function runtimeStatusText(entry){
   if(entry.status==="ready"&&!entry.applied)return "앱 재시작 필요";
@@ -221,7 +225,8 @@ async function installAllRuntimeComponents(button){
   const entries=state.runtime.components||{};
   const pending=["semantic-model","semantic-reranker","document-renderer"].filter((id)=>{
     const entry=entries[id];
-    return entry&&((entry.status!=="ready")||entry.updateAvailable)&&runtimeInstallMetadata(id);
+    const metadata=runtimeInstallMetadata(id,entry);
+    return entry&&((entry.status!=="ready")||entry.updateAvailable)&&metadata;
   });
   if(!pending.length){state.toast="설치 가능한 새 구성요소가 없습니다.";render();return;}
   if(!confirm("설치 가능한 고품질 검색 구성요소를 순서대로 설치할까요?"))return;
@@ -247,7 +252,7 @@ function enhanceRuntimeCard(card,data){
     row.dataset.runtimeComponent=entry.id;
     const label=row.querySelector("b");
     if(label)label.textContent=runtimeComponentLabels[entry.id]||entry.id;
-    const metadata=runtimeInstallMetadata(entry.id);
+    const metadata=runtimeInstallMetadata(entry.id,entry);
     const action=runtimeAction(entry,metadata);
     row.querySelector(".runtime-row-action")?.remove();
     if(!action)return;
@@ -270,7 +275,7 @@ function syncRuntimeCardPresentation(card,data){
     if(!row)continue;
     const label=row.querySelector("b"),status=row.querySelector("em");
     if(label)label.textContent=runtimeComponentLabels[entry.id]||entry.id;
-    if(status){const source=entry.requiresMybox?" · MYBOX 배포본":"";status.textContent=`${runtimeStatusText(entry)}${entry.version?` · ${entry.version}`:""}${source}`;}
+    if(status){const statusText=runtimeStatusText(entry),source=entry.requiresMybox&&statusText!=="MYBOX 배포본 없음"?" · MYBOX 배포본":"";status.textContent=`${statusText}${entry.version?` · ${entry.version}`:""}${source}`;}
   }
   let button=card.querySelector("[data-runtime-install-all]");
   if(!button){
@@ -279,7 +284,7 @@ function syncRuntimeCardPresentation(card,data){
   }
   const allReady=entries.length>=3&&entries.every((entry)=>entry.status==="ready"&&entry.applied&&!entry.updateAvailable);
   const installing=entries.some((entry)=>entry.status==="installing");
-  const available=entries.some((entry)=>runtimeInstallMetadata(entry.id)&&((entry.status!=="ready")||entry.updateAvailable));
+   const available=entries.some((entry)=>runtimeInstallMetadata(entry.id,entry)&&((entry.status!=="ready")||entry.updateAvailable));
   const restartRequired=entries.some((entry)=>entry.status==="ready"&&!entry.applied);
   button.disabled=installing||!available;
   button.textContent=allReady?"최신 상태":installing?"고품질 구성요소 설치 중…":restartRequired&&!available?"앱 재시작 필요":"전체 설치";

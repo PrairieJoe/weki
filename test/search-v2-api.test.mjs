@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +11,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSearchStore } from "../src/search/sqlite-store.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-let nextPort = 5400;
+async function freePort() {
+  const probe = createServer();
+  await new Promise((resolve, reject) => { probe.once("error", reject); probe.listen(0, "127.0.0.1", resolve); });
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
 
 async function startServer(dataDir, { searchV2 = "1" } = {}) {
-  const port = nextPort++;
+  const port = await freePort();
   const env = { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_PORT: String(port), WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1", WEKI_DISABLE_ENV_FILE: "1" };
   if (searchV2 !== null) env.WEKI_SEARCH_V2 = searchV2;
   const child = spawn(process.execPath, ["server.mjs"], {
@@ -30,6 +37,29 @@ async function startServer(dataDir, { searchV2 = "1" } = {}) {
   }
   child.kill();
   throw new Error(`server did not become ready: ${output}`);
+}
+
+async function writePublicRendererManifest(dataDir) {
+  const bytes = Buffer.from("public renderer");
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "manifest.json"), JSON.stringify({
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    license: "MIT",
+    source: "public-test",
+    components: [{
+      id: "document-renderer",
+      version: "1.0.0",
+      files: [{
+        path: "renderer.bin",
+        url: `data:application/octet-stream;base64,${bytes.toString("base64")}`,
+        size: bytes.length,
+        sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+      }],
+    }],
+  }));
 }
 
 test("latest server defaults to v2 and migrates the legacy JSON index", async (t) => {
@@ -97,6 +127,68 @@ test("v2 API returns cursor results and stores feedback", async (t) => {
   assert.equal(feedback.status, 201);
 });
 
+test("v2 API includes bounded evidence context only when requested", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-v2-context-api-"));
+  const store = createSearchStore({ directory: path.join(dataDir, "v2") });
+  store.upsertDocument({ id: "context-doc", name: "근거.pdf", format: "pdf", sourceStatus: "local_available" });
+  store.upsertEvidenceFragment({ id: "context-evidence", documentId: "context-doc", pageStart: 7, pageEnd: 7, type: "text", origin: "native", context: "버스 노선의 변경 근거입니다." });
+  store.upsertKnowledgeUnit({ id: "context-unit", documentId: "context-doc", title: "근거", text: "버스 노선의 변경 근거입니다.", sourceRange: 7, evidenceIds: ["context-evidence"] });
+  store.close();
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const plain = await (await fetch(`http://127.0.0.1:${server.port}/api/v2/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "버스 노선" }) })).json();
+  assert.equal(Object.hasOwn(plain, "contextPack"), false);
+  const contextual = await (await fetch(`http://127.0.0.1:${server.port}/api/v2/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "버스 노선", includeContext: true }) })).json();
+  assert.equal(contextual.contextPack.citations[0].evidenceIds[0], "context-evidence");
+  assert.equal(contextual.contextPack.citations[0].sourceRange, "7");
+});
+
+test("v2 API queues an explicit full search reindex and exposes progress", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-v2-reindex-api-"));
+  await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify({ documents: [], jobs: [], synonyms: [], feedback: [], audit: [] }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/v2/search/reindex`, { method: "POST" });
+  const body = await response.json();
+  assert.equal(response.status, 202, JSON.stringify(body));
+  assert.ok(["indexing", "ready"].includes(body.status));
+  const status = await (await fetch(`http://127.0.0.1:${server.port}/api/v2/status`)).json();
+  assert.ok(["indexing", "ready"].includes(status.reindex.status));
+});
+
+test("full reindex swaps a verified shadow store and preserves searchable evidence", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-v2-shadow-reindex-"));
+  await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify({
+    documents: [{ id: "shadow-doc", name: "shadow.pdf", format: "PDF", processingStatus: "completed", units: [{ id: "shadow-unit", range: 9, text: "shadow reindex 근거", nativeText: "shadow reindex 근거", ocrText: "", evidenceType: "text" }] }],
+    jobs: [], synonyms: [], feedback: [], audit: [],
+  }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const queuedResponse = await fetch(`http://127.0.0.1:${server.port}/api/v2/search/reindex`, { method: "POST" });
+  const queuedText = await queuedResponse.text();
+  assert.match(queuedResponse.headers.get("content-type") || "", /json/, queuedText);
+  const queued = JSON.parse(queuedText);
+  assert.equal(queued.status, "indexing");
+  let status = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const statusResponse = await fetch(`http://127.0.0.1:${server.port}/api/v2/status`);
+    const statusText = await statusResponse.text();
+    assert.match(statusResponse.headers.get("content-type") || "", /json/, `${statusText}\nSERVER=${server.output()}`);
+    status = JSON.parse(statusText);
+    if (status.reindex.status !== "indexing") break;
+    await delay(50);
+  }
+  assert.equal(status.reindex.status, "ready", JSON.stringify(status));
+  const resultResponse = await fetch(`http://127.0.0.1:${server.port}/api/v2/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "shadow reindex" }) });
+  const resultText = await resultResponse.text();
+  assert.match(resultResponse.headers.get("content-type") || "", /json/, resultText);
+  const result = JSON.parse(resultText);
+  assert.ok(result.results[0], JSON.stringify(result));
+  assert.equal(result.results[0].documentId, "shadow-doc");
+  assert.equal(result.results[0].matchedEvidence.pageStart, 9);
+});
+
 test("v2 API applies approved synonym expansions to lexical search", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-v2-synonym-api-"));
   await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify({ documents: [], jobs: [], synonyms: [{ id: "syn-payment", term: "결제", aliases: ["지급"], status: "approved", approved: true }], feedback: [], audit: [] }));
@@ -149,6 +241,133 @@ test("local-ai registration reports an explicit lightweight fallback when the mo
   assert.equal(body.processing.fallbackReason, "semantic_model_unavailable");
 });
 
+test("status exposes an automatic processing default and Local AI eligibility", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-processing-settings-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/status`);
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.processing.defaultMode, "auto");
+  assert.equal(body.processing.effectiveDefaultMode, "lightweight");
+  assert.equal(body.processing.localAiEligible, false);
+  assert.equal(body.processing.localAiEligibilityReason, "runtime_components_incomplete");
+});
+
+test("processing default can be changed without reprocessing existing documents", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-processing-settings-update-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "lightweight" }) });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.settings.defaultProcessingMode, "lightweight");
+  assert.equal(body.processing.effectiveDefaultMode, "lightweight");
+  const stored = JSON.parse(await fs.readFile(path.join(dataDir, "knowledge-base.json"), "utf8"));
+  assert.equal(stored.settings.defaultProcessingMode, "lightweight");
+  assert.deepEqual(stored.documents, []);
+});
+
+test("document registration uses the saved processing default only for new work", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-processing-default-upload-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const lightweightForm = new FormData();
+  lightweightForm.append("files", new Blob(["not a supported document"]), "default.txt");
+  const lightweightResponse = await fetch(`http://127.0.0.1:${server.port}/api/documents`, { method: "POST", body: lightweightForm });
+  const lightweightBody = await lightweightResponse.json();
+  assert.equal(lightweightBody.processing.requestedMode, "lightweight");
+
+  const settingsResponse = await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "local-ai" }) });
+  assert.equal(settingsResponse.status, 200);
+  const localAiForm = new FormData();
+  localAiForm.append("files", new Blob(["not a supported document"]), "local-ai-default.txt");
+  const localAiResponse = await fetch(`http://127.0.0.1:${server.port}/api/documents`, { method: "POST", body: localAiForm });
+  const localAiBody = await localAiResponse.json();
+  assert.equal(localAiBody.processing.requestedMode, "lightweight");
+  assert.equal(localAiBody.processing.fallbackReason, null);
+});
+
+test("runtime status keeps all component rows when only one source manifest is available", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-catalog-"));
+  await fs.mkdir(path.join(dataDir, "runtime", "v1"), { recursive: true });
+  await fs.writeFile(path.join(dataDir, "runtime", "v1", "manifest.json"), JSON.stringify({
+    format: "weki-runtime-manifest", version: 1, appCompatibility: ">=1.0.0", license: "MIT", source: "mybox",
+    components: [{ id: "document-renderer", version: "1.0.0", files: [{ path: "renderer.mjs", size: 1, sha256: "a".repeat(64) }] }],
+  }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const body = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+  assert.deepEqual(Object.keys(body.components).sort(), ["document-renderer", "semantic-model", "semantic-reranker"]);
+  assert.equal(body.components["document-renderer"].sourceType, "mybox");
+  assert.equal(body.components["document-renderer"].requiresMybox, true);
+  assert.equal(body.components["semantic-reranker"].status, "missing");
+  assert.equal(body.components["semantic-reranker"].installable, true);
+  assert.equal(body.components["semantic-reranker"].sourceType, "bundled");
+});
+
+test("runtime status retains the source of an installed pack after another manifest replaces the root manifest", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-source-history-"));
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  const rerankerPath = path.join(runtimeDir, "semantic-reranker", "1.0.0");
+  await fs.mkdir(rerankerPath, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "component-state.json"), JSON.stringify({ format: "weki-runtime-state", version: 1, components: {
+    "semantic-reranker": { id: "semantic-reranker", status: "ready", version: "1.0.0", path: rerankerPath, sourceType: "mybox", source: "mybox" },
+  } }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const body = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+  assert.equal(body.components["semantic-reranker"].sourceType, "mybox");
+  assert.equal(body.components["semantic-reranker"].installable, true);
+  assert.equal(body.components["semantic-reranker"].availableVersion, "1.0.0");
+});
+
+test("document-renderer install and batch resolution reject public manifests", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-public-renderer-policy-"));
+  await writePublicRendererManifest(dataDir);
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const base = `http://127.0.0.1:${server.port}`;
+
+  const status = await (await fetch(`${base}/api/runtime/components`)).json();
+  assert.equal(status.components["document-renderer"].sourceType, "public");
+  const direct = await fetch(`${base}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "document-renderer", version: "1.0.0" }),
+  });
+  const directBody = await direct.json();
+  assert.equal(direct.status, 400, JSON.stringify(directBody));
+  assert.match(directBody.error, /MYBOX/);
+
+  const explicit = await fetch(`${base}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "document-renderer", version: "1.0.0", manifest: status.installable["document-renderer"] }),
+  });
+  assert.equal(explicit.status, 400);
+
+  const batchResponse = await fetch(`${base}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["document-renderer"] }),
+  });
+  assert.equal(batchResponse.status, 202);
+  let runtime = (await batchResponse.json()).runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`${base}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  assert.equal(runtime.installBatch.results["document-renderer"].status, "unavailable", JSON.stringify(runtime.installBatch));
+  assert.deepEqual(runtime.installBatch.failed, []);
+});
+
 test("runtime component API reports degraded optional packs and validates install requests", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-api-"));
   await fs.mkdir(path.join(dataDir, "runtime", "v1"), { recursive: true });
@@ -157,11 +376,16 @@ test("runtime component API reports degraded optional packs and validates instal
   t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const status = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
   assert.equal(status.components["semantic-model"].status, "missing");
+  assert.equal(status.components["semantic-reranker"].status, "missing");
+  assert.equal(status.components["semantic-reranker"].installable, true);
+  assert.equal(status.components["semantic-reranker"].availableVersion, "1.0.0");
   assert.equal(status.components["document-renderer"].status, "missing");
   const runtime = await fetch(`http://127.0.0.1:${server.port}/api/mybox/runtime`);
   assert.equal(runtime.status, 503);
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ componentId: "unknown", version: "1.0.0", manifest: { format: "bad" } }) });
   assert.equal(response.status, 400);
+  const batchResponse = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ componentIds: ["unknown"] }) });
+  assert.equal(batchResponse.status, 400);
 });
 
 test("runtime install batch records an unavailable renderer and a successful bundled reranker", async (t) => {
@@ -249,6 +473,23 @@ test("clean installs keep the document renderer uninstalled until a runtime pack
   assert.equal(status.components["document-renderer"].status, "missing");
   assert.equal(status.components["document-renderer"].applied, false);
   assert.equal(status.components["document-renderer"].reason, "runtime_pack_not_configured");
+});
+
+test("default runtime catalog installs the bundled semantic reranker pack", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-reranker-default-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "semantic-reranker", version: "1.0.0" }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(body.component.id, "semantic-reranker");
+  assert.equal(body.component.status, "ready");
+  assert.equal(await fs.readFile(path.join(dataDir, "runtime", "v1", "semantic-reranker", "1.0.0", "reranker.mjs"), "utf8").then((value) => value.includes("export async function rerank")), true);
 });
 
 test("PDF image pages expose a visual evidence preview", async (t) => {

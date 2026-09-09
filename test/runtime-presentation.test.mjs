@@ -12,6 +12,13 @@ test("runtime actions use Korean labels and disable latest components", () => {
   assert.deepEqual(runtimeAction({ status: "missing", reason: "runtime_pack_not_configured" }, null), null);
 });
 
+test("document-renderer actions require a MYBOX source", () => {
+  assert.deepEqual(runtimeAction({ id: "document-renderer", status: "missing" }, { version: "1.0.0", sourceType: "mybox" }), { label: "설치", disabled: false });
+  assert.deepEqual(runtimeAction({ id: "document-renderer", status: "failed" }, { version: "1.0.0", sourceType: "mybox" }), { label: "재시도", disabled: false });
+  assert.equal(runtimeAction({ id: "document-renderer", status: "missing" }, { version: "1.0.0", sourceType: "public" }), null);
+  assert.equal(runtimeAction({ id: "document-renderer", status: "failed" }, { version: "1.0.0", sourceType: "bundled" }), null);
+});
+
 test("runtime batch only requests restart after a complete successful install", () => {
   assert.equal(shouldAutoRestart({ status: "ready", installed: ["semantic-reranker"], unavailable: [], failed: [] }, []), true);
   assert.equal(shouldAutoRestart({ status: "partial", installed: [], unavailable: ["document-renderer"], failed: [] }, []), false);

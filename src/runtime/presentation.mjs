@@ -7,6 +7,7 @@ const componentLabels = {
 
 export function runtimeAction(entry, metadata) {
   if (!metadata || entry?.reason === "runtime_pack_not_configured") return null;
+  if(entry?.id==="document-renderer"&&metadata?.sourceType!=="mybox")return null;
   if (entry?.status === "failed") return { label: "재시도", disabled: false };
   if (entry?.status === "installing") return { label: "진행 중", disabled: true };
   if (entry?.status === "ready" && entry?.updateAvailable) return { label: "업데이트", disabled: false };

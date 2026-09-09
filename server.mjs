@@ -949,24 +949,26 @@ function myboxRuntimeSource({ structure, componentId, version }) {
   };
 }
 async function runtimeInstallOptions(componentId, version) {
+  const documentRenderer = componentId === "document-renderer";
   let localManifest = null;
   try { localManifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Use the default or MYBOX manifest below. */ }
   const localEntry = localManifest?.components?.find((entry) => entry.id === componentId && (!version || entry.version === version));
-  if (localEntry && localManifest.source !== "mybox") return { manifest: localManifest, version: localEntry.version, sourceType: "public", source: localManifest.source || null, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, fetchImpl: globalThis.fetch };
+  if (localEntry && !documentRenderer && localManifest.source !== "mybox") return { manifest: localManifest, version: localEntry.version, sourceType: "public", source: localManifest.source || null, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, fetchImpl: globalThis.fetch };
   const defaultEntry = DEFAULT_RUNTIME_MANIFEST.components.find((entry) => entry.id === componentId && (!version || entry.version === version));
-  if (defaultEntry) return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
+  if (defaultEntry && !documentRenderer) return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
   try {
     const loaded = await readMyboxRuntimeManifest();
     const entry = loaded.manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
     if (entry) return { manifest: loaded.manifest, version: entry.version, sourceType: "mybox", source: loaded.manifest.source || "mybox", baseUrl: `mybox://runtime/${encodeURIComponent(componentId)}/${encodeURIComponent(entry.version)}/`, fetchImpl: myboxRuntimeSource({ structure: loaded.structure, componentId, version: entry.version }) };
   } catch { /* An unconfigured MYBOX source is a pending component, not a batch failure. */ }
-  if (process.env.WEKI_RUNTIME_MANIFEST_URL) {
+  if (process.env.WEKI_RUNTIME_MANIFEST_URL && !documentRenderer) {
     const response = await fetch(process.env.WEKI_RUNTIME_MANIFEST_URL);
     if (!response.ok) throw new Error("runtime manifest download failed");
     const manifest = await response.json();
     const entry = manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
     if (entry) return { manifest, version: entry.version, sourceType: "public", source: process.env.WEKI_RUNTIME_MANIFEST_URL, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL, fetchImpl: globalThis.fetch };
   }
+  if (documentRenderer) throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
   throw new Error(`runtime component is not currently distributable: ${componentId}`);
 }
 function startRuntimeInstallBatch(componentIds) {
@@ -1049,8 +1051,9 @@ app.post("/api/runtime/components/install", async (req, res) => {
       fetchImpl = defaults.fetchImpl;
       baseUrl = defaults.baseUrl;
     }
-    if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
     const componentId = requestedComponentId;
+    if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
+    if (componentId === "document-renderer" && body.source !== "mybox" && manifest.source !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
     const selectedVersion = String(body.version || manifest.components?.find((entry) => entry.id === componentId)?.version || "");
     const sourceType = body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public";
     const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source: manifest.source || manifestUrl || null });
@@ -1070,6 +1073,7 @@ app.post("/api/runtime/components/:id/retry", async (req, res) => {
   try {
     const manifest = body.manifest;
     if (!manifest || !body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
+    if (req.params.id === "document-renderer" && manifest.source !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
     const sourceType = manifest.source === "mybox" ? "mybox" : "public";
     const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version: String(body.version), publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, sourceType, source: manifest.source || null });
     res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });

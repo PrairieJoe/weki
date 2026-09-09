@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 
 const styles = await readFile(new URL("../styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const runtimePresentation = await readFile(new URL("../src/runtime/presentation.mjs", import.meta.url), "utf8");
 const index = await readFile(new URL("../index.html", import.meta.url), "utf8");
 const electronMain = await readFile(new URL("../electron-main.cjs", import.meta.url), "utf8");
 const server = await readFile(new URL("../server.mjs", import.meta.url), "utf8");
@@ -334,6 +335,12 @@ test("Weki wires source-aware runtime outcomes into stable component rows", () =
   assert.match(main, /dataset\.runtimeComponent===entry\.id/);
   assert.match(main, /source:metadata\.sourceType==="mybox"\?"mybox":null/);
   assert.match(main, /runtime-batch-message/);
+  assert.match(main, /function runtimeInstallMetadata\(id,entry=state\.runtime\?\.components\?\.\[id\]\)/);
+  assert.match(main, /entry\?\.sourceType/);
+  assert.match(main, /entry\?\.requiresMybox/);
+  assert.match(main, /entry\?\.version/);
+  assert.match(runtimePresentation, /entry\?\.id==="document-renderer"&&metadata\?\.sourceType!=="mybox"/);
+  assert.match(main, /document-renderer.*sourceType.*mybox/);
 });
 
 test("Weki persists the processing default and derives Local AI readiness", () => {
