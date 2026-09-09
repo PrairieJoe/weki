@@ -16,7 +16,7 @@ npm test
 npm run build
 ```
 
-개발 서버는 `npm run dev`, 데스크톱 창은 `npm run desktop`, Windows 설치파일은 `npm run dist:win`으로 실행합니다. `run-weki.bat`도 최초 실행 시 동일하게 `npm ci`를 사용하므로 PC별 의존성 버전 차이를 줄일 수 있습니다.
+개발 서버는 `npm run dev`, Electron 데스크톱 창은 `npm run desktop`, Windows 설치파일은 `npm run dist:win`으로 실행합니다. 일반 사용자는 Windows 설치 후 Weki 바로가기를 실행하면 되며 PowerShell이나 API 호출이 필요하지 않습니다. `run-weki.bat`도 최초 실행 시 동일하게 `npm ci`를 사용하므로 PC별 의존성 버전 차이를 줄일 수 있습니다.
 
 개발 환경에서는 다음 명령도 사용할 수 있습니다.
 
@@ -24,7 +24,17 @@ npm run build
 npm run dev
 ```
 
-## v1.0.0 이후 개선사항
+## v1.2.0 개선사항
+
+- SQLite FTS와 vector search를 결합한 RAG 검색, 모델·세대·문서 필터, RRF 결과 결합을 제공합니다.
+- Text/Table/Visual Evidence와 bounded Context Pack, 선택형 semantic reranker fallback을 제공합니다.
+- 한국어·OCR 문장 경계를 고려한 chunking과 Recall@K·MRR·Evidence Precision 평가 유틸리티를 추가했습니다.
+- 설정 · 운영 화면에서 전체 검색 색인을 다시 만들고 진행 상태와 실패 상태를 확인할 수 있습니다.
+- 설정 · 운영 화면에서 의미 검색 모델, 검색 결과 재정렬 모델, 문서 화면 처리기의 3개 상태를 항상 확인할 수 있습니다. 배포본이 있는 구성요소만 `전체 설치`로 순서대로 설치하며, 버전·업데이트·앱 재시작 필요 여부와 MYBOX 배포본 여부를 표시합니다.
+- 기본 처리 모드는 `설치 상태에 따라 자동`으로 설정할 수 있습니다. 3개 구성요소가 모두 준비되어 적용되기 전에는 경량 처리로 동작하고, 모두 준비되면 새 문서부터 Local AI를 기본으로 사용할 수 있습니다.
+- 암호화 백업 및 복원은 다른 PC에서 검색 데이터 또는 전체 문서를 복구할 때 사용하는 `고급 관리` 기능으로 구분했습니다.
+
+## v1.1.0 이후 개선사항
 
 `v1.0.0` 태그 이후 현재 `main`에 반영된 개선은 검색 정확도와 원문 근거 추적을 강화하면서도, 선택형 고품질 구성요소가 없는 환경에서는 기존 경량 처리를 유지하는 방향으로 구성되었습니다.
 
@@ -35,13 +45,21 @@ npm run dev
 - document-renderer를 선택형 runtime pack으로 설치할 수 있으며, 파일 크기·SHA-256·Ed25519 서명·앱 호환성을 검증하고 실패 시 atomic promotion을 하지 않습니다.
 - MYBOX token을 Windows 보안 저장소 기반 암호화 파일로 관리하고, 검색 카탈로그 동기화와 원본 지연 복원 및 runtime 배포 경로를 분리했습니다.
 - runtime 설치 진행률, 재시작 안내, 처리 모드·semantic 색인 상태를 설정 화면과 API에서 확인할 수 있습니다.
-- 관련 설계·운영 문서는 [vNext 1단계 검색 문서](./docs/WEKI_VNEXT_STAGE1.md), [vNext 2단계 구성요소 문서](./docs/WEKI_VNEXT_STAGE2.md), [변경 이력](./docs/CHANGELOG.md)에서 확인할 수 있습니다.
+- 관련 설계·운영 문서는 [vNext 1단계 검색 문서](./docs/WEKI_VNEXT_STAGE1.md), [vNext 2단계 구성요소 문서](./docs/WEKI_VNEXT_STAGE2.md), [이용자 테스트 체크리스트](./docs/USER_TEST_CHECKLIST.md), [변경 이력](./docs/CHANGELOG.md)에서 확인할 수 있습니다.
 
 데스크톱 창으로 실행하려면 다음 명령을 사용합니다.
 
 ```powershell
 npm run desktop
 ```
+
+Windows 설치파일을 만들려면 다음 명령을 사용합니다.
+
+```powershell
+npm run dist:win
+```
+
+생성물은 `release/Weki-1.2.0-Setup.exe`입니다.
 
 ## 현재 지원
 
@@ -55,13 +73,16 @@ npm run desktop
 - MYBOX `weki/knowledge-base.json` 검색 데이터와 `weki/data/` 실제 원본 파일의 분리 저장
 - MYBOX 검색 DB 동기화와 원본 지연 복원, Hash 기준 문서·원본 중복 방지, 감사 기록
 - 동의어·약어 검색 확장과 현재 실행 중인 세션의 PDF/PPT 후속 필터
+- `/api/v2/search`의 `includeContext: true` 요청을 통한 bounded Evidence Context Pack
+- 선택형 `semantic-reranker` runtime pack adapter와 reranker 미설치 시 RRF fallback
+- 검색 품질 평가용 Recall@K·MRR·Evidence precision 유틸리티
 - 문서 단위 삭제와 확인 문구·이중 경고가 필요한 전체 데이터 삭제
 
 ## 알려진 제한
 
 - DOCX/HWPX/HWP의 시각 요소는 아직 전체 페이지 렌더링 OCR이 아니라 추출 가능한 원문 텍스트 중심입니다.
 - HWP는 파서가 지원하는 HWP 5.x 구조에 한정됩니다.
-- 문서 등록의 `Local AI 허용`은 semantic model runtime pack이 설치된 환경에서 사용할 수 있습니다. 모델이 없으면 경량 처리로 자동 전환합니다. `External AI 허용`, 외부 AI Provider 연동과 생성형 요약은 아직 제공하지 않습니다.
+- 문서 등록의 `Local AI 허용`은 semantic model runtime pack이 적용된 환경에서 사용할 수 있습니다. 기본 처리 모드를 자동으로 두면 3개 runtime 구성요소가 모두 준비·적용되기 전까지 경량 처리로 동작하고, 모델이 없거나 적용되지 않은 명시적 Local AI 요청도 경량 처리로 전환합니다. `External AI 허용`, 외부 AI Provider 연동과 생성형 요약은 아직 제공하지 않습니다.
 - MYBOX는 `weki/knowledge-base.json`을 검색 DB로 동기화하고, 원본은 `원본 열기` 시 필요한 파일만 지연 다운로드하는 평문 구조입니다. 원본 포함 업로드 전 경고를 확인해야 합니다. MYBOX 토큰은 설치 시 또는 앱 설정에서 입력하고 선택한 데이터 저장소의 `credentials/mybox-token.json`에 Windows 보안 저장소로 암호화합니다.
 - MYBOX 원본은 `weki/data/<파일 Hash>/<원본 파일명>`에 저장합니다. `knowledge-base.json`은 `data/<파일 Hash>/<원본 파일명>`만 참조하며, 기존 flat/root `data` 구조와 단일 `.weki` 파일은 자동 호환·이동·삭제하지 않습니다.
 - 로컬 문서가 새로 생성된 빈 상태에서 토큰이 있으면 최초 1회만 `knowledge-base.json`을 자동 동기화합니다. 이후 동기화는 설정 화면의 `MYBOX 검색 DB 동기화` 버튼으로만 실행하며, 로컬 삭제는 MYBOX에 전파하지 않습니다.
