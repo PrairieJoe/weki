@@ -1,8 +1,8 @@
 version: 1.2.0
 files:
   - url: Weki-1.2.0-Setup.exe
-    sha512: 9CyznniBiHzXULv3zIvFmw4cTSmC/bapJ+Sp6Y1yxWkiFeX5noEmHK5eWADuFkdMXhVhfwg3WVDF3JYOLF7J3g==
-    size: 232097153
+    sha512: e2jhSMLDXK3Hm1mwXPKRAcDk2kmP0DA43f35D9TycGJlSuDjGF4yRnJMwmYxWnL5qOoCVVwrGwbK2MM8ed1IRg==
+    size: 232097851
 path: Weki-1.2.0-Setup.exe
-sha512: 9CyznniBiHzXULv3zIvFmw4cTSmC/bapJ+Sp6Y1yxWkiFeX5noEmHK5eWADuFkdMXhVhfwg3WVDF3JYOLF7J3g==
-releaseDate: '2026-09-09T13:07:12.656Z'
+sha512: e2jhSMLDXK3Hm1mwXPKRAcDk2kmP0DA43f35D9TycGJlSuDjGF4yRnJMwmYxWnL5qOoCVVwrGwbK2MM8ed1IRg==
+releaseDate: '2026-09-09T13:26:26.376Z'
