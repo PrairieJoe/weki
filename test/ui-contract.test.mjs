@@ -343,6 +343,8 @@ test("Weki wires source-aware runtime outcomes into stable component rows", () =
   assert.match(main, /document-renderer.*sourceType.*mybox/);
   assert.match(main, /note\.textContent=batchNote/);
   assert.match(main, /entry\.status==="failed"&&entry\.error/);
+  assert.match(main, /entry\.requiresMybox&&entry\.installable===false/);
+  assert.ok(main.indexOf('entry.requiresMybox&&entry.installable===false') < main.indexOf('entry.status==="failed"&&entry.error'));
 });
 
 test("Weki persists the processing default and derives Local AI readiness", () => {

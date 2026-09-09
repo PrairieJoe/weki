@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSearchStore } from "../src/search/sqlite-store.mjs";
+import { runtimeAction } from "../src/runtime/presentation.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 async function freePort() {
@@ -481,6 +482,27 @@ test("clean installs keep the document renderer uninstalled until a runtime pack
   assert.equal(status.components["document-renderer"].reason, "runtime_pack_not_configured");
 });
 
+test("persisted public renderer state stays non-installable without MYBOX metadata", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-renderer-public-state-"));
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "component-state.json"), JSON.stringify({ format: "weki-runtime-state", version: 1, components: {
+    "document-renderer": { id: "document-renderer", status: "failed", version: "1.0.0", sourceType: "public", source: "public-test", error: "download failed" },
+  } }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const status = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+  const renderer = status.components["document-renderer"];
+  assert.equal(renderer.status, "failed");
+  assert.equal(renderer.installable, false);
+  assert.equal(renderer.sourceType, "mybox");
+  assert.equal(renderer.requiresMybox, true);
+  assert.equal(renderer.reason, "runtime_pack_not_configured");
+  assert.equal(status.installable["document-renderer"], undefined);
+  assert.equal(runtimeAction(renderer, status.installable["document-renderer"]), null);
+});
+
 test("MYBOX renderer retry uses the MYBOX transport for relative runtime files", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-mybox-retry-"));
   const bytes = Buffer.from("renderer runtime");
@@ -495,6 +517,10 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
       files: [{ path: "renderer.bin", size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") }],
     }],
   };
+  let remoteManifest = {
+    ...manifest,
+    components: [{ ...manifest.components[0], files: [{ ...manifest.components[0].files[0], sha256: "0".repeat(64) }] }],
+  };
   let apiBase = "";
   const provider = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -507,7 +533,7 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
     if (url.pathname === "/v1/drive/folders/version-id/resources") return json({ resources: [{ resourceId: "renderer-file-id", name: "renderer.bin", type: "file" }] });
     if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/mock/manifest` });
     if (url.pathname === "/v1/drive/files/renderer-file-id/download") return json({ downloadUrl: `${apiBase}/mock/renderer` });
-    if (url.pathname === "/v1/mock/manifest") return json(manifest);
+    if (url.pathname === "/v1/mock/manifest") return json(remoteManifest);
     if (url.pathname === "/v1/mock/renderer") { res.setHeader("Content-Type", "application/octet-stream"); return res.end(bytes); }
     res.statusCode = 404;
     return res.end();
@@ -517,10 +543,25 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   const server = await startServer(dataDir, { env: { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: apiBase } });
   t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
 
+  const failedInstall = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "mybox", componentId: "document-renderer", version: "1.0.0" }),
+  });
+  const failedBody = await failedInstall.json();
+  assert.equal(failedInstall.status, 400, JSON.stringify(failedBody));
+  const failedRenderer = failedBody.runtime.components["document-renderer"];
+  assert.equal(failedRenderer.status, "failed");
+  assert.equal(failedRenderer.sourceType, "mybox");
+  assert.equal(failedRenderer.requiresMybox, true);
+  assert.equal(failedRenderer.installable, true);
+  assert.deepEqual(runtimeAction(failedRenderer, failedBody.runtime.installable["document-renderer"]), { label: "재시도", disabled: false });
+  remoteManifest = manifest;
+
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source: "mybox", manifest, version: "1.0.0" }),
+    body: JSON.stringify({ source: "mybox", version: "1.0.0" }),
   });
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));

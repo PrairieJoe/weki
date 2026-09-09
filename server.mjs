@@ -777,7 +777,8 @@ async function runtimeStatus() {
     installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null, sourceType, requiresMybox: sourceType === "mybox" };
   }
   for (const [id, current] of Object.entries(state.components || {})) {
-    if (current?.version && !installable[id]) installable[id] = { version: current.version, license: null, source: current.source || null, sourceType: current.sourceType || null, requiresMybox: current.requiresMybox === true };
+    const hasMyboxRendererMetadata = id === "document-renderer" && (current?.sourceType === "mybox" || current?.requiresMybox === true);
+    if (current?.version && !installable[id] && (id !== "document-renderer" || hasMyboxRendererMetadata)) installable[id] = { version: current.version, license: null, source: hasMyboxRendererMetadata ? current.source || "mybox" : current.source || null, sourceType: hasMyboxRendererMetadata ? "mybox" : current.sourceType || null, requiresMybox: hasMyboxRendererMetadata || current.requiresMybox === true };
   }
   const knownIds = [...new Set([...optionalRuntimeComponents, ...Object.keys(state.components || {}), ...manifestEntries.map((entry) => entry.id)])];
   const components = {};
@@ -793,7 +794,7 @@ async function runtimeStatus() {
       const available = installable[id] || null;
       const myboxOnly = id === "document-renderer" && !available;
       const availableVersion = available?.version || null;
-      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: current.sourceType || available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: current.requiresMybox ?? available?.requiresMybox ?? myboxOnly, reason: status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
+      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: id === "document-renderer" ? "mybox" : current.sourceType || available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: id === "document-renderer" ? true : current.requiresMybox ?? available?.requiresMybox ?? myboxOnly, reason: myboxOnly || status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
     } else {
       const available = installable[id] || null;
       const myboxOnly = id === "document-renderer" && !available;
@@ -1075,11 +1076,12 @@ app.post("/api/runtime/components/:id/retry", async (req, res) => {
   const body = req.body || {};
   try {
     let manifest = body.manifest;
-    if (!manifest || !body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
+    if (!body.version) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
     const version = String(body.version);
     let fetchImpl = globalThis.fetch;
     let baseUrl = null;
-    const sourceType = body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public";
+    const sourceType = body.source === "mybox" || manifest?.source === "mybox" ? "mybox" : "public";
+    if (sourceType !== "mybox" && !manifest) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
     if (sourceType === "mybox") {
       const loaded = await readMyboxRuntimeManifest();
       manifest = loaded.manifest;
