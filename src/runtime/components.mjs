@@ -73,7 +73,7 @@ function withInstallLock(rootDirectory, task) {
   });
 }
 
-async function installComponentUnlocked({ rootDirectory, manifest, componentId, version, fetchImpl = globalThis.fetch, publicKey = null, appVersion = "1.0.0", baseUrl = null }) {
+async function installComponentUnlocked({ rootDirectory, manifest, componentId, version, fetchImpl = globalThis.fetch, publicKey = null, appVersion = "1.0.0", baseUrl = null, sourceType = null, source = null }) {
   const validation = validateManifest(manifest);
   if (!validation.ok) throw new Error(`runtime manifest is invalid: ${validation.reason}`);
   // Development/default manifests may be unsigned; whenever a signature is
@@ -86,7 +86,7 @@ async function installComponentUnlocked({ rootDirectory, manifest, componentId, 
   const state = await readState(rootDirectory);
   const totalFiles = component.files.length;
   const totalBytes = component.files.reduce((sum, file) => sum + Number(file.size || 0), 0);
-  state.components[componentId] = { id: componentId, version, status: "installing", progress: 0, completedFiles: 0, totalFiles, bytesDownloaded: 0, totalBytes, currentFile: component.files[0]?.path || null, updatedAt: new Date().toISOString() };
+  state.components[componentId] = { id: componentId, version, status: "installing", progress: 0, completedFiles: 0, totalFiles, bytesDownloaded: 0, totalBytes, currentFile: component.files[0]?.path || null, sourceType, source, updatedAt: new Date().toISOString() };
   await writeState(rootDirectory, state);
   const componentRoot = path.join(rootDirectory, componentId);
   const stage = path.join(componentRoot, `${version}.partial-${crypto.randomUUID()}`);
@@ -100,8 +100,8 @@ async function installComponentUnlocked({ rootDirectory, manifest, componentId, 
     await fs.writeFile(manifestStage, JSON.stringify(manifest, null, 2), "utf8");
     for (const [index, file] of component.files.entries()) {
       if (!safeRelativePath(file.path)) throw new Error("runtime manifest contains an unsafe path");
-      const source = file.url || (baseUrl ? new URL(file.path, baseUrl).href : file.path);
-      const response = await fetchWithRetry(fetchImpl, source);
+      const fileSource = file.url || (baseUrl ? new URL(file.path, baseUrl).href : file.path);
+      const response = await fetchWithRetry(fetchImpl, fileSource);
       const bytes = Buffer.from(await response.arrayBuffer());
       if (bytes.length !== file.size) throw new Error(`runtime size mismatch: ${file.path}`);
       const hash = crypto.createHash("sha256").update(bytes).digest("hex");
@@ -114,7 +114,7 @@ async function installComponentUnlocked({ rootDirectory, manifest, componentId, 
       const progressState = state.components[componentId] || {};
       const completedFiles = index + 1;
       const bytesDownloaded = Number(progressState.bytesDownloaded || 0) + bytes.length;
-      state.components[componentId] = { ...progressState, id: componentId, version, status: "installing", progress: Math.round((completedFiles / totalFiles) * 100), completedFiles, totalFiles, bytesDownloaded, totalBytes, currentFile: component.files[index + 1]?.path || null, updatedAt: new Date().toISOString() };
+      state.components[componentId] = { ...progressState, id: componentId, version, status: "installing", progress: Math.round((completedFiles / totalFiles) * 100), completedFiles, totalFiles, bytesDownloaded, totalBytes, currentFile: component.files[index + 1]?.path || null, sourceType, source, updatedAt: new Date().toISOString() };
       await writeState(rootDirectory, state);
     }
     await fs.mkdir(componentRoot, { recursive: true });
@@ -122,13 +122,13 @@ async function installComponentUnlocked({ rootDirectory, manifest, componentId, 
     try { await fs.rename(target, previous); } catch (error) { if (error.code !== "ENOENT") throw error; }
     await fs.rename(stage, target);
     await fs.rename(manifestStage, path.join(rootDirectory, MANIFEST_FILE));
-    state.components[componentId] = { ...state.components[componentId], id: componentId, version, status: "ready", progress: 100, completedFiles: totalFiles, totalFiles, bytesDownloaded: totalBytes, totalBytes, currentFile: null, path: target, updatedAt: new Date().toISOString(), previousPath: previous };
+    state.components[componentId] = { ...state.components[componentId], id: componentId, version, status: "ready", progress: 100, completedFiles: totalFiles, totalFiles, bytesDownloaded: totalBytes, totalBytes, currentFile: null, path: target, sourceType, source, updatedAt: new Date().toISOString(), previousPath: previous };
     await writeState(rootDirectory, state);
     return state.components[componentId];
   } catch (error) {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => {});
     await fs.rm(manifestStage, { force: true }).catch(() => {});
-    state.components[componentId] = { ...state.components[componentId], id: componentId, version, status: "failed", error: error.message, updatedAt: new Date().toISOString() };
+    state.components[componentId] = { ...state.components[componentId], id: componentId, version, status: "failed", sourceType, source, error: error.message, updatedAt: new Date().toISOString() };
     await writeState(rootDirectory, state);
     throw error;
   }

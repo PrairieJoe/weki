@@ -27,28 +27,46 @@ test("component install uses partial staging, hash verification and atomic promo
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-"));
   const bytes = Buffer.from("abc");
   const manifest = { format: "weki-runtime-manifest", version: 1, appCompatibility: ">=1.0.0", components: [{ id: "semantic-model", version: "1.0.0", files: [{ path: "model.onnx", size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), url: "https://example.test/model.onnx" }] }] };
-  const result = await installComponent({ rootDirectory: root, manifest, componentId: "semantic-model", version: "1.0.0", fetchImpl: async () => new Response(bytes) });
+  const result = await installComponent({ rootDirectory: root, manifest, componentId: "semantic-model", version: "1.0.0", sourceType: "mybox", source: "mybox://runtime/semantic-model/1.0.0/", fetchImpl: async () => new Response(bytes) });
   assert.equal(result.status, "ready");
+  assert.equal(result.sourceType, "mybox");
+  assert.equal(result.source, "mybox://runtime/semantic-model/1.0.0/");
   assert.deepEqual(await fs.readFile(path.join(root, "semantic-model", "1.0.0", "model.onnx")), bytes);
   assert.equal(JSON.parse(await fs.readFile(path.join(root, "manifest.json"), "utf8")).version, 1);
   assert.equal((await getComponentState(root)).components["semantic-model"].status, "ready");
+  assert.equal((await getComponentState(root)).components["semantic-model"].sourceType, "mybox");
   await assert.rejects(() => installComponent({ rootDirectory: root, manifest, componentId: "semantic-model", version: "1.0.0", fetchImpl: async () => new Response("bad") }));
   await fs.rm(root, { recursive: true, force: true });
 });
 
-test("component install records file-level progress while downloading", async () => {
+test("component install records file-level progress and failure provenance while downloading", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-progress-"));
   const files = [Buffer.from("one"), Buffer.from("two")];
   const manifest = { format: "weki-runtime-manifest", version: 1, appCompatibility: ">=1.0.0", components: [{ id: "document-renderer", version: "1.0.0", files: files.map((bytes, index) => ({ path: `file-${index}.bin`, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), url: `https://example.test/file-${index}.bin` })) }] };
   let observed;
-  const result = await installComponent({ rootDirectory: root, manifest, componentId: "document-renderer", version: "1.0.0", fetchImpl: async (url) => {
+  const result = await installComponent({ rootDirectory: root, manifest, componentId: "document-renderer", version: "1.0.0", sourceType: "mybox", source: "mybox://runtime/document-renderer/1.0.0/", fetchImpl: async (url) => {
     if (url.endsWith("file-1.bin")) observed = await getComponentState(root);
     const bytes = files[Number(url.match(/file-(\d+)/)?.[1] || 0)];
     return new Response(bytes, { status: 200 });
   } });
   assert.equal(observed.components["document-renderer"].completedFiles, 1);
   assert.equal(observed.components["document-renderer"].totalFiles, 2);
+  assert.equal(observed.components["document-renderer"].sourceType, "mybox");
+  assert.equal(observed.components["document-renderer"].source, "mybox://runtime/document-renderer/1.0.0/");
   assert.equal(result.progress, 100);
+  await assert.rejects(() => installComponent({
+    rootDirectory: root,
+    manifest: { ...manifest, components: [{ ...manifest.components[0], files: [{ ...manifest.components[0].files[0], sha256: "0".repeat(64) }] }] },
+    componentId: "document-renderer",
+    version: "1.0.0",
+    sourceType: "mybox",
+    source: "mybox://runtime/document-renderer/1.0.0/",
+    fetchImpl: async () => new Response(files[0]),
+  }));
+  const failed = (await getComponentState(root)).components["document-renderer"];
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.sourceType, "mybox");
+  assert.equal(failed.source, "mybox://runtime/document-renderer/1.0.0/");
   await fs.rm(root, { recursive: true, force: true });
 });
 

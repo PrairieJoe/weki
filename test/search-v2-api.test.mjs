@@ -487,7 +487,7 @@ test("persisted public renderer state stays non-installable without MYBOX metada
   const runtimeDir = path.join(dataDir, "runtime", "v1");
   await fs.mkdir(runtimeDir, { recursive: true });
   await fs.writeFile(path.join(runtimeDir, "component-state.json"), JSON.stringify({ format: "weki-runtime-state", version: 1, components: {
-    "document-renderer": { id: "document-renderer", status: "failed", version: "1.0.0", sourceType: "public", source: "public-test", error: "download failed" },
+    "document-renderer": { id: "document-renderer", status: "failed", version: "1.0.0", sourceType: "public", requiresMybox: true, source: "public-test", error: "download failed" },
   } }));
   const server = await startServer(dataDir);
   t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
@@ -556,6 +556,15 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   assert.equal(failedRenderer.requiresMybox, true);
   assert.equal(failedRenderer.installable, true);
   assert.deepEqual(runtimeAction(failedRenderer, failedBody.runtime.installable["document-renderer"]), { label: "재시도", disabled: false });
+
+  const missingVersion = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "mybox" }),
+  });
+  const missingVersionBody = await missingVersion.json();
+  assert.equal(missingVersion.status, 400);
+  assert.equal(missingVersionBody.error, "MYBOX 재시도에는 version이 필요합니다.");
   remoteManifest = manifest;
 
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
@@ -626,6 +635,9 @@ test("runtime component API confirms when the document renderer is actually appl
         status: "ready",
         version: "0.8.4",
         path: path.join(projectRoot, "node_modules", "@rhwp", "core"),
+        sourceType: "bundled",
+        source: "Weki bundled runtime pack",
+        requiresMybox: false,
       },
     },
   }));
@@ -636,6 +648,8 @@ test("runtime component API confirms when the document renderer is actually appl
   assert.equal(status.components["document-renderer"].status, "ready");
   assert.equal(status.components["document-renderer"].applied, true);
   assert.equal(status.components["document-renderer"].version, "0.8.4");
+  assert.equal(status.components["document-renderer"].sourceType, "bundled");
+  assert.equal(status.components["document-renderer"].requiresMybox, false);
 });
 
 test("v2 store can reconcile source availability without rebuilding the document index", async () => {
