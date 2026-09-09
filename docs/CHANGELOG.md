@@ -70,4 +70,4 @@ npm run test:e2e
 npm run dist:win
 ```
 
-현재 재검증 결과는 Node 테스트 169건 통과, 0건 실패, 0건 skip입니다. Electron 시각 문서 E2E는 저장소의 기본 PDF fixture를 사용해 `npm test`에서 자동 실행되며, Vite production build와 Windows x64 NSIS 패키징 검증도 유지됩니다. 현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.
+현재 재검증 결과는 Node 테스트 174건 통과, 0건 실패, 0건 skip입니다. Electron 시각 문서 E2E는 `npm test`와 별도로 `npm run test:e2e`에서 실행되며, 실행 환경 조건으로 1건 skip되었습니다. Vite production build와 Windows x64 NSIS 패키징 검증도 유지됩니다. 현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.
