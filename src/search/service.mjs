@@ -67,10 +67,11 @@ export function createSearchService({ store, semanticSearch = null, reranker = n
           timings.rerankerMs = now() - rerankStarted;
         }
       }
+      const responsePageSize = request.pageSize || pageSize;
       const offset = decodeCursor(request.cursor);
-      const window = directMaterialized.slice(offset, offset + pageSize + 1);
-      const hasMore = window.length > pageSize;
-      const page = selectEvidence(window.slice(0, pageSize), { limit: pageSize, maxPerDocument: 2, query: request.query });
+      const window = directMaterialized.slice(offset, offset + responsePageSize + 1);
+      const hasMore = window.length > responsePageSize;
+      const page = selectEvidence(window.slice(0, responsePageSize), { limit: responsePageSize, maxPerDocument: 2, query: request.query });
       const results = page.map((row, index) => ({
         resultId: resultIdFor(row.unitId),
         documentId: row.documentId,

@@ -12,7 +12,11 @@ export function normalizeSearchRequest(input = {}) {
   const to = ISO_DATE.test(String(rawFilters.to ?? "")) ? String(rawFilters.to) : null;
   const cursor = input.cursor === undefined || input.cursor === null ? null : String(input.cursor).trim() || null;
   const sessionId = input.sessionId === undefined || input.sessionId === null ? null : String(input.sessionId).trim() || null;
-  return { query, cursor, sessionId, includeContext: Boolean(input.includeContext), filters: { format, dateCriterion, from, to } };
+  const requestedPageSize = Number.parseInt(input.pageSize, 10);
+  const pageSize = Number.isInteger(requestedPageSize) && requestedPageSize > 0 ? Math.min(200, requestedPageSize) : null;
+  const normalized = { query, cursor, sessionId, includeContext: Boolean(input.includeContext), filters: { format, dateCriterion, from, to } };
+  if (pageSize) normalized.pageSize = pageSize;
+  return normalized;
 }
 
 export function cosineSimilarity(left, right) {

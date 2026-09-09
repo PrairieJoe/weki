@@ -250,6 +250,7 @@ test("v2 API rebuilds context and closes pagination when merging synonym queries
   const response = await fetch(`http://127.0.0.1:${server.port}/api/v2/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "결제", includeContext: true }) });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.results.length, 7);
   assert.equal(body.hasMore, false);
   assert.equal(body.nextCursor, null);
   assert.equal(body.contextPack.query, "결제");
@@ -891,6 +892,11 @@ test("default runtime catalog installs the bundled semantic reranker pack", asyn
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-reranker-default-"));
   const server = await startServer(dataDir);
   t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const status = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+  assert.equal(status.installable["semantic-model"].sourceType, "public");
+  assert.equal(status.installable["semantic-model"].source, "https://huggingface.co/intfloat/multilingual-e5-small");
+  assert.equal(status.installable["semantic-reranker"].sourceType, "bundled");
 
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, {
     method: "POST",

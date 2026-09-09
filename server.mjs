@@ -771,11 +771,19 @@ async function runtimeStatus() {
   let manifest = null;
   try { manifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Optional packs are not installed yet. */ }
   const manifestEntries = Array.isArray(manifest?.components) ? manifest.components : [];
-  const installable = Object.fromEntries(DEFAULT_RUNTIME_MANIFEST.components.map((entry) => [entry.id, { version: entry.version, license: entry.license || DEFAULT_RUNTIME_MANIFEST.license, source: "Weki bundled runtime pack", sourceType: "bundled", requiresMybox: false }]));
+  const defaultSource = (entry) => entry.files?.some((file) => typeof file.url === "string" && file.url.startsWith("file:"))
+    ? { source: "Weki bundled runtime pack", sourceType: "bundled" }
+    : { source: DEFAULT_RUNTIME_MANIFEST.source, sourceType: "public" };
+  const installable = Object.fromEntries(DEFAULT_RUNTIME_MANIFEST.components.map((entry) => {
+    const source = defaultSource(entry);
+    return [entry.id, { version: entry.version, license: entry.license || DEFAULT_RUNTIME_MANIFEST.license, ...source, requiresMybox: false }];
+  }));
   for (const entry of manifestEntries) {
     if (entry.id === "document-renderer" && manifest.source !== "mybox") continue;
-    const sourceType = manifest.source === "mybox" ? "mybox" : "public";
-    installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source: manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null, sourceType, requiresMybox: sourceType === "mybox" };
+    const recorded = state.components?.[entry.id];
+    const sourceType = recorded?.sourceType || (manifest.source === "mybox" ? "mybox" : "public");
+    const source = recorded?.source || manifest.source || process.env.WEKI_RUNTIME_MANIFEST_URL || null;
+    installable[entry.id] = { version: entry.version, license: entry.license || manifest.license || null, source, sourceType, requiresMybox: sourceType === "mybox" };
   }
   for (const [id, current] of Object.entries(state.components || {})) {
     const hasMyboxRendererMetadata = id === "document-renderer" && current?.sourceType === "mybox";
@@ -894,7 +902,8 @@ app.post("/api/v2/search", async (req, res) => {
     const db = await readDb();
     const expansion = expandQuery(db, body.query || "");
     const queries = [expansion.normalized, ...(expansion.queries || [])].filter(Boolean);
-    const responses = await Promise.all(queries.map((query) => v2Search.search({ ...body, query })));
+    const mergedQueryRequest = queries.length > 1 ? { ...body, cursor: null, pageSize: 200 } : body;
+    const responses = await Promise.all(queries.map((query) => v2Search.search({ ...mergedQueryRequest, query })));
     const result = responses[0] || await v2Search.search({ ...body, query: expansion.normalized });
     const merged = new Map();
     for (const response of responses) for (const row of response.results || []) {
@@ -982,7 +991,10 @@ async function runtimeInstallOptions(componentId, version) {
   if (bundledLocalEntry) return { manifest: localManifest, version: localEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
   if (localEntry && !documentRenderer && localManifest.source !== "mybox") return { manifest: localManifest, version: localEntry.version, sourceType: "public", source: localManifest.source || null, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, fetchImpl: globalThis.fetch };
   const defaultEntry = DEFAULT_RUNTIME_MANIFEST.components.find((entry) => entry.id === componentId && (!version || entry.version === version));
-  if (defaultEntry && !documentRenderer) return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
+  if (defaultEntry && !documentRenderer) {
+    const bundled = defaultEntry.files?.some((file) => typeof file.url === "string" && file.url.startsWith("file:"));
+    return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: bundled ? "bundled" : "public", source: bundled ? "Weki bundled runtime pack" : DEFAULT_RUNTIME_MANIFEST.source, baseUrl: null, fetchImpl: bundled ? fetchRuntimeSource : globalThis.fetch };
+  }
   let myboxUnavailable = null;
   if (!process.env.NAVER_MBOX_TOKEN) myboxUnavailable = new RuntimePackUnavailableError("MYBOX runtime pack이 설정되지 않았습니다.");
   try {
