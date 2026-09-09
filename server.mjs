@@ -20,6 +20,7 @@ import { createMyboxClient } from "./src/server/mybox.mjs";
 import { CLOUD_CATALOG_NAME, CLOUD_RUNTIME_MANIFEST_NAME, CLOUD_RUNTIME_ROOT_NAME, CLOUD_RUNTIME_VERSION_NAME, downloadCloudOriginal, findCloudOriginalResource, findRuntimeFolderStructure, findRuntimeResource, findWekiFolderStructure, mergeCloudCatalog, readCloudCatalog, shouldRunInitialMyboxSync } from "./src/server/mybox-sync.mjs";
 import { documentOriginalKey, migrateLegacyOriginals, normalizeOriginalName, originalNameOf, resolveDocumentOriginalPath } from "./src/server/original-storage.mjs";
 import { createSearchService, RANKING_VERSION } from "./src/search/service.mjs";
+import { buildContextPack } from "./src/search/context-pack.mjs";
 import { buildEvidenceSnippet, formatDisplayScore } from "./src/search/evidence-display.mjs";
 import { expandSynonymQuery, normalizeSynonymCollection, normalizeSynonymEntry, suggestSynonymCandidates, validateSynonymInput } from "./src/search/synonyms.mjs";
 import { matchesRouteConstraints } from "./src/search/query-normalization.mjs";
@@ -901,8 +902,16 @@ app.post("/api/v2/search", async (req, res) => {
       const existing = merged.get(key);
       if (!existing || Number(row.displayScore || 0) > Number(existing.displayScore || 0)) merged.set(key, row);
     }
+    const mergedQueries = queries.length > 1;
     result.results = [...merged.values()].sort((left, right) => Number(right.displayScore || 0) - Number(left.displayScore || 0) || String(left.unitId).localeCompare(String(right.unitId))).map((row, index) => ({ ...row, rank: index + 1 }));
-    result.hasMore = responses.some((response) => response.hasMore);
+    if (mergedQueries) {
+      // A cursor from one synonym query cannot resume the combined result set safely.
+      result.hasMore = false;
+      result.nextCursor = null;
+      if (body.includeContext) result.contextPack = buildContextPack({ query: expansion.normalized, rows: result.results });
+    } else {
+      result.hasMore = responses.some((response) => response.hasMore);
+    }
     const selectedQuery = expansion.normalized;
     res.json({ ...result, query: expansion.normalized, searchQuery: selectedQuery, expansions: expansion.expansions });
   } catch (error) { res.status(500).json({ error: "v2 검색에 실패했습니다.", detail: error.message }); }
@@ -1092,6 +1101,7 @@ app.post("/api/runtime/components/install", async (req, res) => {
       sourceType = defaults.sourceType;
       source = defaults.source;
     }
+    if (body.source === "public" && manifest?.source === "mybox") throw new Error("명시한 public 출처와 manifest의 MYBOX 출처가 일치하지 않습니다.");
     const componentId = requestedComponentId;
     if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
     const selectedVersion = String(body.version || manifest.components?.find((entry) => entry.id === componentId)?.version || "");
@@ -1113,6 +1123,7 @@ app.post("/api/runtime/components/install-all", async (req, res) => {
 app.post("/api/runtime/components/:id/retry", async (req, res) => {
   const body = req.body || {};
   try {
+    if (body.source === "public" && body.manifest?.source === "mybox") throw new Error("명시한 public 출처와 manifest의 MYBOX 출처가 일치하지 않습니다.");
     if (req.params.id === "document-renderer" && body.source !== "mybox") throw new Error("document-renderer 재시도에는 명시적인 MYBOX 배포본이 필요합니다.");
     let manifest = body.manifest;
     let fetchImpl = globalThis.fetch;

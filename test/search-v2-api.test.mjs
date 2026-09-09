@@ -228,6 +228,35 @@ test("v2 API merges approved synonym results even when the original term matches
   assert.deepEqual(new Set(body.results.map((result) => result.unitId)), new Set(["payment-unit", "payout-unit"]));
 });
 
+test("v2 API rebuilds context and closes pagination when merging synonym queries", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-v2-synonym-context-"));
+  await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify({ documents: [], jobs: [], synonyms: [{ id: "syn-payment", term: "결제", aliases: ["지급"], status: "approved", approved: true }], feedback: [], audit: [] }));
+  const store = createSearchStore({ directory: path.join(dataDir, "v2") });
+  for (let index = 1; index <= 6; index += 1) {
+    const id = `payment-unit-${index}`;
+    const evidenceId = `payment-evidence-${index}`;
+    const text = `결제 절차 ${index}`;
+    store.upsertDocument({ id, name: `${id}.pdf`, format: "pdf", sourceStatus: "local_available" });
+    store.upsertEvidenceFragment({ id: evidenceId, documentId: id, pageStart: index, pageEnd: index, type: "text", origin: "native", context: text });
+    store.upsertKnowledgeUnit({ id, documentId: id, title: text, text, evidenceIds: [evidenceId] });
+  }
+  store.upsertDocument({ id: "payout-unit", name: "payout-unit.pdf", format: "pdf", sourceStatus: "local_available" });
+  store.upsertEvidenceFragment({ id: "payout-evidence", documentId: "payout-unit", pageStart: 7, pageEnd: 7, type: "text", origin: "native", context: "지급 절차 안내" });
+  store.upsertKnowledgeUnit({ id: "payout-unit", documentId: "payout-unit", title: "지급 절차 안내", text: "지급 절차 안내", evidenceIds: ["payout-evidence"] });
+  store.close();
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/v2/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "결제", includeContext: true }) });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.hasMore, false);
+  assert.equal(body.nextCursor, null);
+  assert.equal(body.contextPack.query, "결제");
+  assert.ok(body.contextPack.citations.some((citation) => citation.evidenceIds.includes("payout-evidence")), JSON.stringify(body.contextPack));
+  assert.ok(body.contextPack.citations.some((citation) => citation.evidenceIds.includes("payment-evidence-1")), JSON.stringify(body.contextPack));
+});
+
 test("local-ai registration reports an explicit lightweight fallback when the model is unavailable", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-local-ai-fallback-"));
   const server = await startServer(dataDir);
@@ -381,6 +410,15 @@ test("document-renderer install and batch resolution reject public manifests", a
   const spoofedInstallBody = await spoofedInstall.json();
   assert.equal(spoofedInstall.status, 400, JSON.stringify(spoofedInstallBody));
   assert.match(spoofedInstallBody.error, /MYBOX/);
+
+  const contradictorySource = await fetch(`${base}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "semantic-model", version: "1.0.0", source: "public", manifest: spoofedManifest }),
+  });
+  const contradictorySourceBody = await contradictorySource.json();
+  assert.equal(contradictorySource.status, 400, JSON.stringify(contradictorySourceBody));
+  assert.match(contradictorySourceBody.error, /출처/);
 
   const batchResponse = await fetch(`${base}/api/runtime/components/install-all`, {
     method: "POST",
@@ -828,6 +866,15 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   const spoofedRetryBody = await spoofedRetry.json();
   assert.equal(spoofedRetry.status, 400, JSON.stringify(spoofedRetryBody));
   assert.match(spoofedRetryBody.error, /MYBOX/);
+
+  const contradictoryRetry = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "public", version: "1.0.0", manifest }),
+  });
+  const contradictoryRetryBody = await contradictoryRetry.json();
+  assert.equal(contradictoryRetry.status, 400, JSON.stringify(contradictoryRetryBody));
+  assert.match(contradictoryRetryBody.error, /출처/);
 
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
     method: "POST",
