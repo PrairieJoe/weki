@@ -384,6 +384,12 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(main, /manifest가 아직 게시되지 않았습니다/);
 });
 
+test("Weki refreshes active jobs before deciding whether runtime install may restart", () => {
+  const polling = main.match(/function startRuntimePolling\(\).*?function resetMyboxRuntimeCache/s)?.[0] || "";
+  assert.match(polling, /fetch\("\/api\/jobs"\)/);
+  assert.ok(polling.indexOf('fetch("/api/jobs")') < polling.indexOf("scheduleRuntimeRestart"));
+});
+
 test("Weki exposes user-facing full search reindex controls", () => {
   assert.match(main, /검색 색인 다시 만들기/);
   assert.match(main, /id="reindex-search"/);

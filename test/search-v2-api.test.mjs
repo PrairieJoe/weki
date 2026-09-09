@@ -357,6 +357,31 @@ test("document-renderer install and batch resolution reject public manifests", a
   });
   assert.equal(explicit.status, 400);
 
+  const spoofedManifest = {
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "mybox",
+    components: [{
+      id: "document-renderer",
+      version: "1.0.0",
+      files: [{
+        path: "renderer.bin",
+        url: "data:application/octet-stream;base64,c3Bvb2ZlZA==",
+        size: 7,
+        sha256: crypto.createHash("sha256").update("spoofed").digest("hex"),
+      }],
+    }],
+  };
+  const spoofedInstall = await fetch(`${base}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "document-renderer", version: "1.0.0", manifest: spoofedManifest }),
+  });
+  const spoofedInstallBody = await spoofedInstall.json();
+  assert.equal(spoofedInstall.status, 400, JSON.stringify(spoofedInstallBody));
+  assert.match(spoofedInstallBody.error, /MYBOX/);
+
   const batchResponse = await fetch(`${base}/api/runtime/components/install-all`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -545,6 +570,16 @@ test("MYBOX manifest parse failures remain failed with their concrete error", as
   assert.match(runtime.installBatch.results["document-renderer"].error, /MYBOX runtime manifest를 읽을 수 없습니다/);
   assert.equal(runtime.installBatch.failed[0].id, "document-renderer");
   assert.equal(runtime.installBatch.unavailable.length, 0);
+
+  const refreshed = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+  const renderer = refreshed.components["document-renderer"];
+  assert.equal(renderer.status, "failed");
+  assert.match(renderer.error, /MYBOX runtime manifest를 읽을 수 없습니다/);
+  assert.equal(renderer.sourceType, "mybox");
+  assert.equal(renderer.requiresMybox, true);
+  assert.equal(renderer.installable, true);
+  assert.equal(refreshed.installable["document-renderer"].sourceType, "mybox");
+  assert.deepEqual(runtimeAction(renderer, refreshed.installable["document-renderer"]), { label: "재시도", disabled: false });
 });
 
 test("valid MYBOX manifests without the requested component are unavailable", async (t) => {
@@ -698,6 +733,15 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   assert.equal(missingVersionBody.error, "MYBOX 재시도에는 version이 필요합니다.");
   remoteManifest = manifest;
 
+  const spoofedRetry = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: "1.0.0", manifest: { ...manifest, components: [{ ...manifest.components[0], files: [{ ...manifest.components[0].files[0], url: "data:application/octet-stream;base64,c3Bvb2ZlZA==" }] }] } }),
+  });
+  const spoofedRetryBody = await spoofedRetry.json();
+  assert.equal(spoofedRetry.status, 400, JSON.stringify(spoofedRetryBody));
+  assert.match(spoofedRetryBody.error, /MYBOX/);
+
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -723,6 +767,8 @@ test("default runtime catalog installs the bundled semantic reranker pack", asyn
   assert.equal(response.status, 201);
   assert.equal(body.component.id, "semantic-reranker");
   assert.equal(body.component.status, "ready");
+  assert.equal(body.component.sourceType, "bundled");
+  assert.equal(body.component.source, "Weki bundled runtime pack");
   assert.equal(await fs.readFile(path.join(dataDir, "runtime", "v1", "semantic-reranker", "1.0.0", "reranker.mjs"), "utf8").then((value) => value.includes("export async function rerank")), true);
 });
 

@@ -31,7 +31,7 @@ import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
 import { collectZipVisualAssets } from "./src/processing/visual-assets.mjs";
 import { buildVisualContext } from "./src/processing/visual-context.mjs";
 import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
-import { getComponentState, installComponent, retryComponent, validateManifest } from "./src/runtime/components.mjs";
+import { getComponentState, installComponent, persistComponentFailure, retryComponent, validateManifest } from "./src/runtime/components.mjs";
 import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
 import { createRuntimeRerankerProvider } from "./src/runtime/reranker.mjs";
 import { normalizeProcessingSettings, PROCESSING_DEFAULT_MODES, resolveProcessingDefault } from "./src/server/processing-settings.mjs";
@@ -778,7 +778,8 @@ async function runtimeStatus() {
   }
   for (const [id, current] of Object.entries(state.components || {})) {
     const hasMyboxRendererMetadata = id === "document-renderer" && current?.sourceType === "mybox";
-    if (current?.version && !installable[id] && (id !== "document-renderer" || hasMyboxRendererMetadata)) installable[id] = { version: current.version, license: null, source: hasMyboxRendererMetadata ? current.source || "mybox" : current.source || null, sourceType: hasMyboxRendererMetadata ? "mybox" : current.sourceType || null, requiresMybox: hasMyboxRendererMetadata };
+    const recoverableRendererFailure = id === "document-renderer" && hasMyboxRendererMetadata && current?.status === "failed";
+    if ((current?.version || recoverableRendererFailure) && !installable[id] && (id !== "document-renderer" || hasMyboxRendererMetadata)) installable[id] = { version: current.version || null, license: null, source: hasMyboxRendererMetadata ? current.source || "mybox" : current.source || null, sourceType: hasMyboxRendererMetadata ? "mybox" : current.sourceType || null, requiresMybox: hasMyboxRendererMetadata };
   }
   const knownIds = [...new Set([...optionalRuntimeComponents, ...Object.keys(state.components || {}), ...manifestEntries.map((entry) => entry.id)])];
   const components = {};
@@ -795,7 +796,8 @@ async function runtimeStatus() {
       const myboxOnly = id === "document-renderer" && !available;
       const rendererBundledReady = id === "document-renderer" && status === "ready" && Boolean(documentRenderer) && current.sourceType !== "mybox" && current.sourceType !== "public";
       const availableVersion = available?.version || null;
-      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: id === "document-renderer" ? (rendererBundledReady ? "bundled" : "mybox") : current.sourceType || available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: id === "document-renderer" ? !rendererBundledReady : current.requiresMybox ?? available?.requiresMybox ?? myboxOnly, reason: id === "document-renderer" && !rendererBundledReady && !available || status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
+      const rendererUnavailable = id === "document-renderer" && !rendererBundledReady && !available && current.reason !== "runtime_install_failed";
+      components[id] = { ...current, status, applied, installable: Boolean(available), availableVersion, updateAvailable: status === "ready" && Boolean(availableVersion) && compareRuntimeVersions(availableVersion, current.version) > 0, sourceType: id === "document-renderer" ? (rendererBundledReady ? "bundled" : "mybox") : current.sourceType || available?.sourceType || (myboxOnly ? "mybox" : null), requiresMybox: id === "document-renderer" ? !rendererBundledReady : current.requiresMybox ?? available?.requiresMybox ?? myboxOnly, reason: rendererUnavailable || status === "missing" && !available ? "runtime_pack_not_configured" : !applied && status === "ready" ? "component_not_applied" : current.reason || null };
     } else {
       const available = installable[id] || null;
       const myboxOnly = id === "document-renderer" && !available;
@@ -1018,6 +1020,7 @@ function startRuntimeInstallBatch(componentIds) {
         options = await runtimeInstallOptions(componentId, current?.availableVersion || null);
       } catch (error) {
         if (!(error instanceof RuntimePackUnavailableError)) {
+          if (componentId === "document-renderer") await persistComponentFailure({ rootDirectory: runtimeRoot, componentId, version: current?.availableVersion || null, error, sourceType: "mybox", source: "mybox", requiresMybox: true });
           runtimeInstallBatchState.results[componentId] = { status: "failed", error: error.message };
           runtimeInstallBatchState.failed.push({ id: componentId, error: error.message });
           runtimeInstallBatchState.completed += 1;
@@ -1059,10 +1062,13 @@ app.post("/api/runtime/components/install", async (req, res) => {
   const body = req.body || {};
   try {
     const requestedComponentId = String(body.componentId || "");
+    if (requestedComponentId === "document-renderer" && body.source !== "mybox") throw new Error("document-renderer는 명시적인 MYBOX 배포본만 설치할 수 있습니다.");
     let manifest = body.manifest;
     const manifestUrl = body.manifestUrl ? String(body.manifestUrl) : null;
     let fetchImpl = globalThis.fetch;
     let baseUrl = manifestUrl;
+    let sourceType = null;
+    let source = null;
     if (body.source === "mybox") {
       const loaded = await readMyboxRuntimeManifest();
       manifest = loaded.manifest;
@@ -1075,19 +1081,23 @@ app.post("/api/runtime/components/install", async (req, res) => {
       // signed file entry.
       fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
       baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;
+      sourceType = "mybox";
+      source = manifest.source || "mybox";
     } else if (!manifest && manifestUrl) { const response = await fetch(manifestUrl); if (!response.ok) throw new Error("runtime manifest download failed"); manifest = await response.json(); }
     if (!manifest && !manifestUrl && !body.source) {
       const defaults = await runtimeInstallOptions(requestedComponentId, body.version ? String(body.version) : null);
       manifest = defaults.manifest;
       fetchImpl = defaults.fetchImpl;
       baseUrl = defaults.baseUrl;
+      sourceType = defaults.sourceType;
+      source = defaults.source;
     }
     const componentId = requestedComponentId;
     if (!manifest) return res.status(400).json({ error: "manifest가 필요합니다." });
-    if (componentId === "document-renderer" && body.source !== "mybox" && manifest.source !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
     const selectedVersion = String(body.version || manifest.components?.find((entry) => entry.id === componentId)?.version || "");
-    const sourceType = body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public";
-    const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source: manifest.source || manifestUrl || null });
+    const resolvedSourceType = sourceType || (body.source === "mybox" || manifest.source === "mybox" ? "mybox" : "public");
+    const resolvedSource = source || manifest.source || manifestUrl || null;
+    const component = await installComponent({ rootDirectory: runtimeRoot, manifest, componentId, version: selectedVersion, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType: resolvedSourceType, source: resolvedSource });
     res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
 });
@@ -1103,10 +1113,12 @@ app.post("/api/runtime/components/install-all", async (req, res) => {
 app.post("/api/runtime/components/:id/retry", async (req, res) => {
   const body = req.body || {};
   try {
+    if (req.params.id === "document-renderer" && body.source !== "mybox") throw new Error("document-renderer 재시도에는 명시적인 MYBOX 배포본이 필요합니다.");
     let manifest = body.manifest;
     let fetchImpl = globalThis.fetch;
     let baseUrl = null;
     const sourceType = body.source === "mybox" || manifest?.source === "mybox" ? "mybox" : "public";
+    let source = manifest?.source || null;
     if (!body.version) return res.status(400).json({ error: sourceType === "mybox" ? "MYBOX 재시도에는 version이 필요합니다." : "재시도에는 manifest와 version이 필요합니다." });
     const version = String(body.version);
     if (sourceType !== "mybox" && !manifest) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
@@ -1118,9 +1130,10 @@ app.post("/api/runtime/components/:id/retry", async (req, res) => {
       if (version !== selected.version) throw new Error(`MYBOX runtime component version not found: ${req.params.id}@${version}`);
       fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
       baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;
+      source = manifest.source || "mybox";
     }
     if (req.params.id === "document-renderer" && sourceType !== "mybox") throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
-    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source: manifest.source || null });
+    const component = await retryComponent({ rootDirectory: runtimeRoot, manifest, componentId: req.params.id, version, publicKey: process.env.WEKI_RUNTIME_PUBLIC_KEY || RUNTIME_PUBLIC_KEY, baseUrl, fetchImpl, sourceType, source });
     res.status(201).json({ component, restartRequired: ["semantic-model", "semantic-reranker", "document-renderer"].includes(component.id), runtime: await runtimeStatus() });
   } catch (error) { res.status(400).json({ error: error.message, runtime: await runtimeStatus() }); }
 });

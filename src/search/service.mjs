@@ -13,14 +13,15 @@ import {
   selectEvidence,
 } from "./retrieval.mjs";
 import { buildEvidenceSnippet, formatDisplayScore } from "./evidence-display.mjs";
+import { buildContextPack } from "./context-pack.mjs";
 
-export const RANKING_VERSION = "v2-lexical-rrf60";
+export const RANKING_VERSION = "v2-lexical-rrf60-rerank-ready";
 
 function resultIdFor(unitId, rankingVersion = RANKING_VERSION) {
   return crypto.createHash("sha256").update(`${rankingVersion}:${unitId}`).digest("hex").slice(0, 24);
 }
 
-export function createSearchService({ store, semanticSearch = null, pageSize = 5, now = () => performance.now() }) {
+export function createSearchService({ store, semanticSearch = null, reranker = null, pageSize = 5, now = () => performance.now() }) {
   return {
     async search(input = {}) {
       const request = normalizeSearchRequest(input);
@@ -55,6 +56,17 @@ export function createSearchService({ store, semanticSearch = null, pageSize = 5
       }).filter(Boolean);
       const directMaterialized = collapseEvidenceDuplicates(filterDirectEvidenceResults(materialized, request.query), request.query)
         .sort((left, right) => evidenceProximityScore(right, request.query) - evidenceProximityScore(left, request.query) || evidenceMatchPriority(right, request.query) - evidenceMatchPriority(left, request.query) || right.score - left.score || String(left.unitId).localeCompare(String(right.unitId)));
+      if (typeof reranker === "function" && directMaterialized.length) {
+        const rerankStarted = now();
+        try {
+          const reranked = await reranker(request.query, directMaterialized.slice(0, 50));
+          const scores = new Map((reranked || []).map((row) => [String(row.unitId), Number(row.score)]).filter(([, score]) => Number.isFinite(score)));
+          if (scores.size) directMaterialized.sort((left, right) => (scores.get(String(right.unitId)) ?? -Infinity) - (scores.get(String(left.unitId)) ?? -Infinity) || right.score - left.score || String(left.unitId).localeCompare(String(right.unitId)));
+          timings.rerankerMs = now() - rerankStarted;
+        } catch {
+          timings.rerankerMs = now() - rerankStarted;
+        }
+      }
       const offset = decodeCursor(request.cursor);
       const window = directMaterialized.slice(offset, offset + pageSize + 1);
       const hasMore = window.length > pageSize;
@@ -80,7 +92,7 @@ export function createSearchService({ store, semanticSearch = null, pageSize = 5
       }));
       timings.totalMs = now() - started;
       store.recordSearch?.({ sessionId, query: request.query, results, rankingVersion: RANKING_VERSION });
-      return {
+      const response = {
         sessionId,
         results,
         nextCursor: hasMore ? Buffer.from(JSON.stringify({ offset: offset + pageSize }), "utf8").toString("base64url") : null,
@@ -89,6 +101,8 @@ export function createSearchService({ store, semanticSearch = null, pageSize = 5
         timings,
         rankingVersion: RANKING_VERSION,
       };
+      if (request.includeContext) response.contextPack = buildContextPack({ query: request.query, rows: page });
+      return response;
     },
   };
 }

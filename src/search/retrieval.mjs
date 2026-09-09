@@ -12,7 +12,7 @@ export function normalizeSearchRequest(input = {}) {
   const to = ISO_DATE.test(String(rawFilters.to ?? "")) ? String(rawFilters.to) : null;
   const cursor = input.cursor === undefined || input.cursor === null ? null : String(input.cursor).trim() || null;
   const sessionId = input.sessionId === undefined || input.sessionId === null ? null : String(input.sessionId).trim() || null;
-  return { query, cursor, sessionId, filters: { format, dateCriterion, from, to } };
+  return { query, cursor, sessionId, includeContext: Boolean(input.includeContext), filters: { format, dateCriterion, from, to } };
 }
 
 export function cosineSimilarity(left, right) {

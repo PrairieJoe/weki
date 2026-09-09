@@ -63,6 +63,28 @@ export async function getComponentState(rootDirectory) {
   return readState(rootDirectory);
 }
 
+export function persistComponentFailure({ rootDirectory, componentId, version = null, error, sourceType = null, source = null, requiresMybox = false, reason = "runtime_install_failed" }) {
+  return withInstallLock(rootDirectory, async () => {
+    await fs.mkdir(rootDirectory, { recursive: true });
+    const state = await readState(rootDirectory);
+    const previous = state.components?.[componentId] || {};
+    state.components[componentId] = {
+      ...previous,
+      id: componentId,
+      version: version ?? previous.version ?? null,
+      status: "failed",
+      sourceType,
+      source,
+      requiresMybox,
+      reason,
+      error: String(error?.message || error || "runtime install failed"),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeState(rootDirectory, state);
+    return state.components[componentId];
+  });
+}
+
 function withInstallLock(rootDirectory, task) {
   const key = path.resolve(rootDirectory);
   const previous = installLocks.get(key) || Promise.resolve();

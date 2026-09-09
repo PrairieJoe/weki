@@ -23,6 +23,7 @@ test("normalizes v2 search requests deterministically", () => {
     query: "버스 시간표",
     cursor: "3",
     sessionId: null,
+    includeContext: false,
     filters: { format: ["pdf"], dateCriterion: "modified", from: "2024-01-01", to: null },
   });
 });
@@ -269,4 +270,25 @@ test("search service returns a bounded matched snippet and display score", async
   assert.equal(result.results[0].relevanceScore > 0, true);
   store.close();
   await rm(directory, { recursive: true, force: true });
+});
+
+test("search service reranks candidates and includes a bounded context pack on request", async () => {
+  const units = new Map([
+    ["u1", { unitId: "u1", documentId: "d1", documentName: "보고서.pdf", format: "pdf", title: "보고서", heading: "결론", text: "버스 노선 결론", nativeText: "버스 노선 결론", ocrText: "", sourceRange: "4", evidence: [{ id: "e1", pageStart: 4, pageEnd: 4, type: "text", origin: "native", context: "버스 노선 결론" }] }],
+    ["u2", { unitId: "u2", documentId: "d1", documentName: "보고서.pdf", format: "pdf", title: "보고서", heading: "본문", text: "버스 노선 본문", nativeText: "버스 노선 본문", ocrText: "", sourceRange: "3", evidence: [{ id: "e2", pageStart: 3, pageEnd: 3, type: "text", origin: "native", context: "버스 노선 본문" }] }],
+  ]);
+  const store = {
+    searchLexical: () => [{ id: "u1", engine: "fts" }, { id: "u2", engine: "fts" }],
+    hydrateUnits: (ids) => ids.map((id) => units.get(id)).filter(Boolean),
+    health: () => ({ fts: "healthy" }),
+    recordSearch: () => {},
+  };
+  const service = createSearchService({
+    store,
+    reranker: async (_query, candidates) => candidates.map((candidate) => ({ unitId: candidate.unitId, score: candidate.unitId === "u2" ? 1 : 0 })),
+  });
+  const result = await service.search({ query: "버스 노선", includeContext: true });
+  assert.equal(result.results[0].unitId, "u2");
+  assert.equal(result.contextPack.citations[0].evidenceIds[0], "e2");
+  assert.ok(result.contextPack.citations[0].text.length <= 1200);
 });

@@ -330,7 +330,7 @@ function scheduleRuntimeRestart(batch){
   render();
   state.runtimeRestartTimer=setTimeout(()=>{state.runtimeRestartTimer=null;void restartApp();},3000);
 }
-function startRuntimePolling(){ if(state.runtimePollTimer||state.page!=="settings")return; state.runtimePollTimer=setInterval(async()=>{try{const latest=await (await fetch("/api/runtime/components")).json(); state.runtime=latest; state.runtimeLoading=false; await syncRuntimeComponents(); scheduleRuntimeRestart(latest.installBatch); if(!Object.values(latest.components||{}).some((entry)=>entry.status==="installing")&&latest.installBatch?.status!=="indexing"){clearInterval(state.runtimePollTimer);state.runtimePollTimer=null;}}catch{}},500); }
+function startRuntimePolling(){ if(state.runtimePollTimer||state.page!=="settings")return; state.runtimePollTimer=setInterval(async()=>{try{const latest=await (await fetch("/api/runtime/components")).json(); state.runtime=latest; state.runtimeLoading=false; await syncRuntimeComponents(); const jobs=await (await fetch("/api/jobs")).json(); state.jobs=(jobs.jobs||[]).slice(0,20); scheduleRuntimeRestart(latest.installBatch); if(!Object.values(latest.components||{}).some((entry)=>entry.status==="installing")&&latest.installBatch?.status!=="indexing"){clearInterval(state.runtimePollTimer);state.runtimePollTimer=null;}}catch{}},500); }
 function resetMyboxRuntimeCache(){ state.myboxRuntime=null; state.myboxRuntimeFetchedAt=0; }
 async function installRuntimeComponent(button,{componentId,version,source=null,manifestUrl=null}){
   const confirmation=source==="mybox"?"MYBOX runtime manifest에서 document-renderer를 설치할까요?":`${componentId} 구성요소를 다운로드할까요?`;
