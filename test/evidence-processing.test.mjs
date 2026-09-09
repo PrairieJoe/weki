@@ -49,6 +49,11 @@ test("chunks long page text with bounded size and overlap", () => {
   assert.equal(chunks[0].text.split(" ").at(-64), chunks[1].text.split(" ")[0]);
 });
 
+test("prefers a sentence boundary when a chunk has enough room", () => {
+  const chunks = chunkText("첫 번째 문장입니다. 두 번째 문장의 핵심 내용입니다. 세 번째 문장입니다.", { maxTokens: 8, overlapTokens: 2 });
+  assert.match(chunks[0].text, /내용입니다\.$/u);
+});
+
 test("builds text, table and visual evidence with provenance and asset hash", () => {
   const fragments = buildEvidenceFragments({
     documentId: "d1", page: 4, nativeText: "제목 본문", ocrText: "도표 OCR",

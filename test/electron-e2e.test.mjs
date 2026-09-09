@@ -11,8 +11,9 @@ import { chromium } from "playwright";
 
 const require = createRequire(import.meta.url);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const fixture = process.env.WEKI_E2E_FIXTURE || "";
-const query = process.env.WEKI_E2E_QUERY || "111-1번 변경구간";
+const defaultFixture = path.join(projectRoot, "test_data", "01 시내버스 개편 방향 및 효과, 개편사항.pdf");
+const fixture = process.env.WEKI_E2E_FIXTURE || defaultFixture;
+const query = process.env.WEKI_E2E_QUERY || "시내버스 노선 개편";
 const expectVisual = process.env.WEKI_E2E_EXPECT_VISUAL !== "0";
 const expectedPage = Number(process.env.WEKI_E2E_EXPECT_PAGE || 4);
 const forbiddenPages = new Set(String(process.env.WEKI_E2E_FORBIDDEN_PAGES || "").split(",").map((value) => Number(value.trim())).filter(Number.isInteger));
@@ -38,7 +39,7 @@ async function waitFor(label, callback, { timeout = 180_000, interval = 500 } = 
   throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ""}`);
 }
 
-test("Electron flow indexes a visual document and shows concise highlighted evidence", { skip: !fixture }, async (t) => {
+test("Electron flow indexes a visual document and shows concise highlighted evidence", async (t) => {
   const source = path.resolve(fixture);
   await fs.access(source);
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-electron-e2e-"));

@@ -335,14 +335,31 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     });
   }
 
-  function listEmbeddings({ dimension = null, generation = null } = {}) {
+  function listEmbeddings({ dimension = null, model = null, generation = null } = {}) {
     let sql = "SELECT unit_id AS unitId, dimension, vector_json AS vectorJson, model, generation FROM embeddings";
     const params = [];
     const conditions = [];
     if (dimension !== null) { conditions.push("dimension = ?"); params.push(Number(dimension)); }
+    if (model) { conditions.push("model = ?"); params.push(String(model)); }
     if (generation) { conditions.push("generation = ?"); params.push(String(generation)); }
     if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
     return db.prepare(sql).all(...params).map((row) => ({ ...row, vector: JSON.parse(row.vectorJson) }));
+  }
+
+  function filterUnitIds(unitIds, filters = {}) {
+    const ids = [...new Set((unitIds || []).map(String).filter(Boolean))];
+    if (!ids.length) return new Set();
+    const rows = db.prepare(`SELECT u.id AS unitId, d.format, d.created_at AS createdAt, d.modified_at AS modifiedAt, d.accessed_at AS accessedAt
+      FROM knowledge_units u JOIN documents d ON d.id = u.document_id
+      WHERE u.id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
+    const formats = new Set((filters.format || []).map((value) => String(value).toLowerCase()));
+    const criterion = filters.dateCriterion === "created" ? "createdAt" : filters.dateCriterion === "accessed" ? "accessedAt" : "modifiedAt";
+    return new Set(rows.filter((row) => {
+      if (formats.size && !formats.has(String(row.format || "").toLowerCase())) return false;
+      if (filters.from && (!row[criterion] || String(row[criterion]) < filters.from)) return false;
+      if (filters.to && (!row[criterion] || String(row[criterion]).slice(0, 10) > filters.to)) return false;
+      return true;
+    }).map((row) => String(row.unitId)));
   }
 
   function health() {
@@ -386,6 +403,7 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     deleteDocument,
     replaceDocumentIndex,
     listEmbeddings,
+    filterUnitIds,
     searchLexical,
     hydrateUnits,
     setIndexState: (state) => statements.setIndex.run({ name: clean(state.name), generation: clean(state.generation), revision: Number(state.revision) || 0, status: clean(state.status) || "ready", updatedAt: new Date().toISOString() }),
@@ -393,7 +411,10 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     recordSearch,
     recordFeedback,
     health,
-    close: () => db.close(),
+    close: () => {
+      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { /* The database may already be closing. */ }
+      db.close();
+    },
   };
 }
 

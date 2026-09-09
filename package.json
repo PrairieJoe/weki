@@ -11,6 +11,7 @@
     "test:e2e": "node --test test/electron-e2e.test.mjs",
     "build": "vite build",
     "benchmark:search:v2": "node scripts/benchmark-search-v2.mjs",
+    "evaluate:search:v2": "node scripts/evaluate-search-v2.mjs",
     "runtime:semantic:install": "node scripts/install-semantic-runtime.mjs",
     "preview": "vite preview",
     "desktop": "electron .",
@@ -78,5 +79,13 @@
     "tesseract.js": "^7.0.0",
     "usearch": "2.26.2",
     "vite": "^7.3.6"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.28.2": true,
+    "onnxruntime-node@1.20.1": true,
+    "tesseract.js@7.0.0": true,
+    "usearch@2.26.2": true
   }
 }

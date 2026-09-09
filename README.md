@@ -45,7 +45,7 @@ npm run dev
 - document-renderer를 선택형 runtime pack으로 설치할 수 있으며, 파일 크기·SHA-256·Ed25519 서명·앱 호환성을 검증하고 실패 시 atomic promotion을 하지 않습니다.
 - MYBOX token을 Windows 보안 저장소 기반 암호화 파일로 관리하고, 검색 카탈로그 동기화와 원본 지연 복원 및 runtime 배포 경로를 분리했습니다.
 - runtime 설치 진행률, 재시작 안내, 처리 모드·semantic 색인 상태를 설정 화면과 API에서 확인할 수 있습니다.
-- 관련 설계·운영 문서는 [vNext 1단계 검색 문서](./docs/WEKI_VNEXT_STAGE1.md), [vNext 2단계 구성요소 문서](./docs/WEKI_VNEXT_STAGE2.md), [이용자 테스트 체크리스트](./docs/USER_TEST_CHECKLIST.md), [변경 이력](./docs/CHANGELOG.md)에서 확인할 수 있습니다.
+- 관련 설계·운영 문서는 [vNext 1단계 검색 문서](./docs/WEKI_VNEXT_STAGE1.md), [vNext 2단계 구성요소 문서](./docs/WEKI_VNEXT_STAGE2.md), [v1.2.0 릴리스 노트](./docs/RELEASE_NOTES_V1.2.0.md), [이용자 테스트 체크리스트](./docs/USER_TEST_CHECKLIST.md), [변경 이력](./docs/CHANGELOG.md)에서 확인할 수 있습니다.
 
 데스크톱 창으로 실행하려면 다음 명령을 사용합니다.
 

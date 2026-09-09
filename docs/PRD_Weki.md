@@ -794,7 +794,7 @@ Visual Analysis에 실패하더라도 OCR/Native Text 등으로 검색 가능한
 | **Local AI 허용** | 경량 처리 + 사용자 PC에서 동작하는 명확한 Local AI 사용 허용 |
 | **External AI 허용** | 경량 처리 + Local AI + 관리영역 외부의 Cloud AI 및 비로컬 Custom Endpoint 사용 허용 |
 
-기본값은 **`경량 처리만`**이다.
+기본 설정은 **`auto`(`설치 상태에 따라 자동`)**다. 세 runtime 구성요소(semantic model, semantic reranker, document renderer)가 모두 준비되어 앱에 적용되기 전에는 실제 기본 처리 모드를 `경량 처리만`으로 사용한다. 세 구성요소가 모두 준비·적용되면 **새로 시작하는 작업부터** `Local AI 허용`을 실제 기본 처리 모드로 사용할 수 있다. 기존 Document는 이 설정 변경만으로 자동 재처리하지 않는다. 사용자가 특정 Job에서 `경량 처리만`을 명시한 경우에는 Local AI로 자동 승격하지 않는다.
 
 ### Local AI 예시
 
@@ -1632,6 +1632,8 @@ API Key는 전체 백업에서도 제외한다.
 
 자동 스케줄 백업은 1차 범위에 포함하지 않는다.
 
+사용자 화면에서는 백업·복원이 일반 설정과 구분되도록 `고급 관리` 영역에서 제공하고, **다른 PC에서 검색 데이터 또는 전체 문서를 복구할 때 사용하는 기능**이라는 목적을 함께 안내한다.
+
 백업 시작 조건은 **§3.7 Maintenance Exclusive Operation**을 따른다.
 
 백업 실행 중 다음 읽기 기능은 허용한다.
@@ -2176,7 +2178,7 @@ Vector / Lexical 검색 인덱스.
 
 1. 사용자가 앱 실행
 2. 저장소 위치 확인
-3. 기본 Processing Mode `경량 처리만` 안내
+3. 기본 Processing Mode `설치 상태에 따라 자동` 안내. runtime 구성요소가 준비되기 전에는 실제로 경량 처리로 동작함을 함께 표시
 4. 빈 Knowledge Base에서 `[문서 등록 시작]`
 5. 파일 또는 디렉토리 선택
 6. 해당 Job의 Processing Mode 확인
@@ -2369,7 +2371,7 @@ Vector / Lexical 검색 인덱스.
 
 | Requirement ID | Source | Acceptance Condition |
 |---|---|---|
-| REQ-AI-MODE-001 | §9.1~9.3 | 기본 Processing Mode는 `경량 처리만`이며 선택 모드보다 상위 AI로 자동 승격하지 않는다. |
+| REQ-AI-MODE-001 | §9.1~9.3 | 기본 설정은 `auto`이며 세 runtime 구성요소가 모두 준비·적용되기 전에는 경량 처리, 이후 새 작업부터 Local AI를 사용한다. 사용자가 경량 처리를 명시한 Job은 Local AI로 자동 승격하지 않는다. |
 | REQ-AI-SELECT-001 | §9.3~9.4 | Provider/Model은 Processing Mode 상한 → Job Override → 허용 가능한 전역 기본값 순으로 선택하며 Override로 모드 상한을 우회할 수 없다. |
 | REQ-AI-ENDPOINT-001 | §9.4 | 명확한 Local Endpoint만 Local AI로 취급하고 불확실한 Endpoint는 External AI로 분류한다. |
 | REQ-AI-DATA-001 | §9.5 | External AI에는 필요한 최소 처리 단위만 전송한다. |

@@ -20,10 +20,16 @@ export function chunkText(value, { maxTokens = 384, overlapTokens = 64 } = {}) {
   const chunks = [];
   let start = 0;
   while (start < tokens.length) {
-    const next = tokens.slice(start, start + max);
+    const hardEnd = Math.min(tokens.length, start + max);
+    let end = hardEnd;
+    const minimumBoundary = Math.min(hardEnd, start + Math.max(2, Math.floor(max * 0.35)));
+    for (let candidate = hardEnd - 1; candidate >= minimumBoundary; candidate -= 1) {
+      if (/[.!?。！？]$/u.test(tokens[candidate])) { end = candidate + 1; break; }
+    }
+    const next = tokens.slice(start, end);
     chunks.push({ text: next.join(" "), tokens: next.length, startToken: start, endToken: start + next.length - 1 });
-    if (start + next.length >= tokens.length) break;
-    start += Math.max(1, max - overlap);
+    if (end >= tokens.length) break;
+    start += Math.max(1, next.length - overlap);
   }
   return chunks;
 }

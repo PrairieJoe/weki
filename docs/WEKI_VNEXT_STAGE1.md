@@ -34,4 +34,4 @@ npm run benchmark:search:v2 -- 1000 100
 
 1단계에서는 semantic model/ANN과 고품질 포맷 renderer를 설치하지 않습니다. 이 경우 engine 상태는 degraded/unavailable로 남고 lexical 검색은 계속 동작합니다. SQLite는 설치된 `better-sqlite3@13.0.3`를 우선 사용하고, 로드할 수 없는 개발 환경에서는 Node 22+의 `node:sqlite`로 대체합니다. semantic/runtime pack은 2단계에서 선택 설치합니다.
 
-변경 이력의 사용자 관점 요약은 [README.md](../README.md#v100-이후-개선사항), 전체 변경 목록은 [CHANGELOG.md](./CHANGELOG.md)를 참조하세요.
+변경 이력의 사용자 관점 요약은 [README.md](../README.md#v110-이후-개선사항), 전체 변경 목록은 [CHANGELOG.md](./CHANGELOG.md)를 참조하세요.
