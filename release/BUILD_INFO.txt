@@ -1,11 +1,11 @@
-Source state: main at ee1f17c plus preserved prior-session working-tree changes
-Build date/time: 2026-09-09 22:38:40 +09:00
+Source state: clean HEAD at 5b22e06
+Build date/time: 2026-09-09 22:44:55 +09:00
 Application version: 1.2.0
 Installer file name: Weki-1.2.0-Setup.exe
-Installer size: 232098076 bytes
+Installer size: 232094980 bytes
 Installer path: release/Weki-1.2.0-Setup.exe
-Installer SHA-256: 0C990B2C0F2C8B82F84F93733DDD9CB19A3ABF060B083B06EC85EDB0FFFBDB7F
-Installer SHA-512: 6DB9CFD272E0B0F0C970CA0CFC316B4AE7FE4FAE6B71ED6D656344CBD4B7E01CF13C597AACD7A389E2D303A7201F72685006CFD07B707E9742509BBF489348A4
+Installer SHA-256: 1A53A1CE204480FA929AACB45929E501AD2C7F3727C6C3CDE3202994C0BF7061
+Installer SHA-512: 658B6D06E0EA69544363DAC2BE64572F8559FBA8BB9D1172889BC0F98A510641E4FD968C6800BE1BABCBEA23A68F8592A7BCAF3849424D125D61F0035102A144
 npm test: 176 passed, 1 environment-flaky status-api startup failure (177 total)
 npm runtime-focused suite: PASS (107 passed, 0 failed, 0 skipped)
 npm run test:e2e: SKIPPED (1 environment-gated test)
