@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSearchStore } from "../src/search/sqlite-store.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -162,6 +162,82 @@ test("runtime component API reports degraded optional packs and validates instal
   assert.equal(runtime.status, 503);
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ componentId: "unknown", version: "1.0.0", manifest: { format: "bad" } }) });
   assert.equal(response.status, 400);
+});
+
+test("runtime install batch records an unavailable renderer and a successful bundled reranker", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-install-outcome-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const base = `http://127.0.0.1:${server.port}`;
+
+  const response = await fetch(`${base}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["semantic-reranker", "document-renderer"] }),
+  });
+  const queued = await response.json();
+  assert.equal(response.status, 202, JSON.stringify(queued));
+
+  let runtime = queued.runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`${base}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  const batch = runtime.installBatch;
+  assert.equal(batch.status, "partial", JSON.stringify(batch));
+  assert.equal(batch.results["semantic-reranker"].status, "installed");
+  assert.equal(batch.results["document-renderer"].status, "unavailable");
+  assert.deepEqual(batch.failed, []);
+  assert.ok(batch.installed.includes("semantic-reranker"));
+  assert.ok(batch.unavailable.includes("document-renderer"));
+});
+
+test("runtime install batch continues after a real reranker failure", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-install-failure-"));
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "manifest.json"), JSON.stringify({
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "local-test",
+    components: [{
+      id: "semantic-reranker",
+      version: "1.0.0",
+      files: [{
+        path: "reranker.mjs",
+        url: pathToFileURL(path.join(dataDir, "missing-reranker.mjs")).href,
+        size: 1,
+        sha256: "0".repeat(64),
+      }],
+    }],
+  }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const base = `http://127.0.0.1:${server.port}`;
+
+  const response = await fetch(`${base}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["semantic-reranker", "document-renderer"] }),
+  });
+  const queued = await response.json();
+  assert.equal(response.status, 202, JSON.stringify(queued));
+
+  let runtime = queued.runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`${base}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  const batch = runtime.installBatch;
+  assert.equal(batch.status, "failed", JSON.stringify(batch));
+  assert.equal(batch.results["semantic-reranker"].status, "failed");
+  assert.equal(batch.results["document-renderer"].status, "unavailable");
+  assert.equal(batch.failed[0].id, "semantic-reranker");
+  assert.equal(batch.currentComponent, null);
+  assert.ok(batch.finishedAt);
 });
 
 test("clean installs keep the document renderer uninstalled until a runtime pack is present", async (t) => {
