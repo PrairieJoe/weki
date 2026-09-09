@@ -240,6 +240,13 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
+test("Weki release metadata is promoted to v1.2.0", () => {
+  assert.equal(packageJson.version, "1.2.0");
+  assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
+  assert.match(readme, /v1\.2\.0 개선사항/);
+  assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
+});
+
 test("Weki installer pages share one custom value-entry layout", () => {
   assert.equal(packageJson.build?.nsis?.allowToChangeInstallationDirectory, false);
   assert.match(installer, /Page custom WekiInstallDirPageCreate WekiInstallDirPageLeave/);
@@ -295,6 +302,50 @@ test("Weki disables unfinished AI controls while keeping lightweight processing 
   assert.match(styles, /\.disabled/);
 });
 
+test("Weki explains all runtime component states and supports a single install flow", () => {
+  assert.match(main, /semantic-model/);
+  assert.match(main, /semantic-reranker/);
+  assert.match(main, /document-renderer/);
+  assert.match(main, /전체 설치/);
+  assert.match(main, /배포 준비 중/);
+  assert.match(main, /업데이트/);
+  assert.match(main, /정상 작동/);
+  assert.match(main, /고급 관리/);
+  assert.match(main, /다른 PC에서 검색 데이터/);
+  assert.match(server, /install-all/);
+  assert.match(server, /availableVersion/);
+  assert.match(server, /updateAvailable/);
+});
+
+test("Weki keeps the full-install action separate from the runtime description", () => {
+  assert.match(main, /classList\.add\("runtime-description"\)/);
+  assert.match(main, /card\.querySelector\("\.runtime-description"\)/);
+  assert.match(main, /button\.textContent=.*전체 설치/);
+  assert.doesNotMatch(main, /const description=heading\?\.nextElementSibling/);
+});
+
+test("Weki wires source-aware runtime outcomes into stable component rows", () => {
+  assert.match(main, /MYBOX 배포본 없음/);
+  assert.match(main, /재시도/);
+  assert.match(main, /설치 가능한 구성요소 설치가 완료되었습니다/);
+  assert.match(main, /runtimeBatchMessage/);
+  assert.match(main, /sourceType/);
+  assert.match(main, /data-runtime-component/);
+  assert.match(main, /dataset\.runtimeComponent===entry\.id/);
+  assert.match(main, /source:metadata\.sourceType==="mybox"\?"mybox":null/);
+  assert.match(main, /runtime-batch-message/);
+});
+
+test("Weki persists the processing default and derives Local AI readiness", () => {
+  assert.match(main, /defaultProcessingMode/);
+  assert.match(main, /\/api\/settings/);
+  assert.match(main, /설치 상태에 따라 자동/);
+  assert.match(main, /Local AI 사용/);
+  assert.match(server, /defaultProcessingMode/);
+  assert.match(server, /effectiveDefaultMode/);
+  assert.match(server, /localAiEligible/);
+});
+
 test("Weki exposes runtime status, install progress and a restart action", () => {
   assert.match(server, /document-renderer/);
   assert.match(server, /completedFiles/);
@@ -320,6 +371,14 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(main, /myboxRendererInstalling/);
   assert.match(main, /MYBOX_RUNTIME_CACHE_TTL/);
   assert.match(main, /manifest가 아직 게시되지 않았습니다/);
+});
+
+test("Weki exposes user-facing full search reindex controls", () => {
+  assert.match(main, /검색 색인 다시 만들기/);
+  assert.match(main, /id="reindex-search"/);
+  assert.match(main, /\/api\/v2\/search\/reindex/);
+  assert.match(main, /searchV2/);
+  assert.match(main, /completed.*total|total.*completed/);
 });
 
 test("Weki records the effective analysis mode and semantic indexing stage", () => {

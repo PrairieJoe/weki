@@ -1,13 +1,19 @@
 import "./styles.js";
 import { formatDisplayScore, highlightEvidence } from "./search/evidence-display.mjs";
+import { runtimeAction, runtimeBatchMessage, shouldAutoRestart } from "./runtime/presentation.mjs";
 
 let docs = [];
 const MYBOX_RUNTIME_CACHE_TTL = 30_000;
-const state = { page: "search", query: "", apiResults: [], searchCursor: null, searchHasMore: false, jobs: [], selectedFiles: [], status: null, mybox: { connected: false, backups: [] }, myboxLoaded: false, myboxRuntime: null, myboxRuntimeFetchedAt: 0, myboxRuntimePromise: null, myboxRendererInstalling: false, searchSessionId: null, rankingVersion: null, searchAbortController: null, runtimeLoading: false, runtime: null, runtimePollTimer: null, toast: "", dialog: null, loading: false, expandedEvidence: new Set() };
+const state = { page: "search", query: "", apiResults: [], searchCursor: null, searchHasMore: false, jobs: [], selectedFiles: [], status: null, searchV2: null, searchReindexPollTimer: null, mybox: { connected: false, backups: [] }, myboxLoaded: false, myboxRuntime: null, myboxRuntimeFetchedAt: 0, myboxRuntimePromise: null, myboxRendererInstalling: false, searchSessionId: null, rankingVersion: null, searchAbortController: null, runtimeLoading: false, runtime: null, runtimePollTimer: null, runtimeBatchRequested: false, runtimeRestartTimer: null, toast: "", dialog: null, loading: false, expandedEvidence: new Set() };
 const icons = { search:"⌕", add:"＋", docs:"▤", settings:"⚙", spark:"✦", arrow:"→", close:"×", pause:"Ⅱ", play:"▶", more:"⋯", file:"▧", check:"✓", alert:"!" };
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const activeJobs = () => state.jobs.filter((job) => ["queued", "processing", "paused"].includes(job.status));
 const statusLabel = { processing:"처리 중", queued:"대기", paused:"일시중지", completed:"완료", skipped:"건너뜀", failed:"실패", cancelled:"취소됨" };
+const runtimeComponentLabels = { "semantic-model":"의미 검색 모델", "semantic-reranker":"검색 결과 재정렬 모델", "document-renderer":"문서 화면 처리기" };
+const runtimeStatusLabels = { healthy:"정상 작동", ready:"사용 가능", degraded:"일부 기능 제한", missing:"설치 필요", installing:"설치 중", failed:"설치 실패", unavailable:"사용할 수 없음" };
+const processingDefaultLabels = { auto:"설치 상태에 따라 자동", lightweight:"경량 처리", "local-ai":"Local AI 사용" };
+const healthStatusLabels = { healthy:"정상 작동", degraded:"일부 기능 제한", unavailable:"사용할 수 없음", reindexing:"색인 다시 만드는 중", disabled:"사용하지 않음" };
+function healthStatusLabel(value){ const status=typeof value==="object"?value?.status:value; return healthStatusLabels[status]||status||"확인 중"; }
 
 function nav(){
   const items = [["search","검색",icons.search],["add","문서 등록",icons.add],["documents","문서 관리",icons.docs],["settings","설정 · 운영",icons.settings]];
@@ -45,8 +51,8 @@ document.addEventListener("click", async (event) => {
   render();
 }, true);
 function migrationNotice(){ const migration=state.status?.search?.migration; if(!migration||migration.status==="ready")return ""; const label=migration.status==="failed"?"검색 색인 이관 중 일부 항목이 실패했습니다.":"기존 검색 데이터를 새 검색 색인으로 이관 중입니다."; return `<div class="toast" role="status">${escape(label)} (${migration.completed||0}/${migration.total||0})</div>`; }
-function render(){ const views={search:searchPage,add:addPage,documents:documentsPageV2,settings:settingsPageV2}; document.querySelector("#app").innerHTML=`<div class="app-shell">${nav()}${shellHeader()}${views[state.page]()}${migrationNotice()}${state.toast?`<div class="toast" role="status">${escape(state.toast)}<button data-close-toast aria-label="알림 닫기">×</button></div>`:""}${dialog()}</div>`; updateStorageHelpCopy(); bind(); if(state.page==="settings"){ wireOperations(); wireMybox(); } }
-async function refresh(){ const shouldFetchMybox=!state.myboxLoaded||state.page==="settings"; const requests=[fetch("/api/documents"),fetch("/api/jobs"),fetch("/api/status")]; if(shouldFetchMybox)requests.push(fetch("/api/mybox/status")); const [documents,jobs,status,myboxStatus]=await Promise.all(requests); const docData=await documents.json(), jobData=await jobs.json(); state.status=await status.json(); const semantic=state.status.search?.semantic; if(semantic&&typeof semantic==="object"){state.status.search.semanticDetails=semantic;state.status.search.semantic=semantic.status;} if(myboxStatus){ state.mybox=await myboxStatus.json(); state.myboxLoaded=true; } docs=docData.documents.map((doc)=>({...doc,type:doc.format,source:sourceStatusLabel(doc.sourceStatus),date:doc.registeredAt?new Date(doc.registeredAt).toLocaleDateString("ko-KR"):"-"})); state.jobs=jobData.jobs.slice(0,20); }
+function render(){ const views={search:searchPage,add:addPage,documents:documentsPageV2,settings:settingsPageV2}; document.querySelector("#app").innerHTML=`<div class="app-shell">${nav()}${shellHeader()}${views[state.page]()}${migrationNotice()}${state.toast?`<div class="toast" role="status">${escape(state.toast)}<button data-close-toast aria-label="알림 닫기">×</button></div>`:""}${dialog()}</div>`; updateStorageHelpCopy(); bind(); if(state.page==="settings"){ wireOperations(); wireMybox(); syncSearchReindexControls(); } }
+async function refresh(){ const shouldFetchMybox=!state.myboxLoaded||state.page==="settings"; const requests=[fetch("/api/documents"),fetch("/api/jobs"),fetch("/api/status"),fetch("/api/v2/status")]; if(shouldFetchMybox)requests.push(fetch("/api/mybox/status")); const [documents,jobs,status,v2Status,myboxStatus]=await Promise.all(requests); const docData=await documents.json(), jobData=await jobs.json(); state.status=await status.json(); state.searchV2=await v2Status.json(); const semantic=state.status.search?.semantic; if(semantic&&typeof semantic==="object"){state.status.search.semanticDetails=semantic;state.status.search.semantic=semantic.status;} if(myboxStatus){ state.mybox=await myboxStatus.json(); state.myboxLoaded=true; } docs=docData.documents.map((doc)=>({...doc,type:doc.format,source:sourceStatusLabel(doc.sourceStatus),date:doc.registeredAt?new Date(doc.registeredAt).toLocaleDateString("ko-KR"):"-"})); state.jobs=jobData.jobs.slice(0,20); }
 async function runSearch(loadMore=false){ const input=document.querySelector("#query"), query=input?.value.trim()||state.query; if(!query)return; if(!loadMore){state.searchCursor=null;state.searchHasMore=false;state.expandedEvidence.clear();} state.searchAbortController?.abort(); const controller=new AbortController(); state.searchAbortController=controller; state.query=query; state.loading=true; render(); try{ const pagination=loadMore?{sessionId:state.searchSessionId,cursor:state.searchCursor}:{}; const response=await fetch("/api/v2/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,...pagination}),signal:controller.signal}); const data=await response.json(); state.searchSessionId=data.sessionId||state.searchSessionId; state.rankingVersion=data.rankingVersion||state.rankingVersion; const nextResults=(data.results||[]).map((row)=>({...row,fileName:row.documentName,score:row.relevanceScore,displayScore:row.displayScore,snippet:row.matchedEvidence?.snippet,text:row.matchedEvidence?.context,matchedTerms:row.matchedEvidence?.matchedTerms,truncated:row.matchedEvidence?.truncated,matchedPage:row.matchedEvidence?.pageStart,evidenceType:row.matchedEvidence?.type,evidenceOrigin:row.matchedEvidence?.origin,visualAssetName:row.matchedEvidence?.assetName})); state.apiResults=loadMore?[...state.apiResults,...nextResults]:nextResults; state.searchCursor=data.nextCursor||null; state.searchHasMore=Boolean(data.hasMore); state.toast=data.expansions?.length?`검색 확장: ${data.expansions.join(", ")}`:""; }catch(error){if(error.name!=="AbortError"){if(!loadMore)state.apiResults=[];state.toast="검색에 실패했습니다. 로컬 저장소 상태를 확인해 주세요.";}} finally{if(state.searchAbortController===controller){state.searchAbortController=null;state.loading=false;render();}} }
 async function uploadFiles(){ const input=document.querySelector("#file-input"); if(!input?.files?.length){state.toast="등록할 파일을 먼저 선택해 주세요.";render();return;} const mode=document.querySelector('input[name="mode"]:checked')?.value||"lightweight"; const form=new FormData(); [...input.files].forEach((file)=>form.append("files",file));form.append("mode",mode);state.toast="문서를 처리 대기열에 추가하는 중…";render();try{const response=await fetch("/api/documents",{method:"POST",body:form});const data=await response.json();state.toast=response.ok?"문서를 처리 대기열에 추가했습니다.":data.error||"문서 등록에 실패했습니다.";await refresh();}catch{state.toast="문서 등록 중 네트워크 오류가 발생했습니다.";}render();}
 async function restartApp(){ state.toast="Weki를 다시 시작하는 중입니다…"; render(); try{if(window.wekiApp?.restart){await window.wekiApp.restart();return;} location.reload();}catch{state.toast="자동 재시작을 실행하지 못했습니다. 창을 닫고 Weki를 다시 열어 주세요.";render();} }
@@ -148,11 +154,176 @@ function appendSelectedFiles(files){ const keys=new Set(state.selectedFiles.map(
 function removeSelectedFile(index){ state.selectedFiles.splice(index,1); }
 function selectedFilesMarkup(){ if(!state.selectedFiles.length)return ""; return `<div class="selected-files" aria-label="선택한 문서 목록">${state.selectedFiles.map((file,index)=>`<div class="selected-file"><span><b>${escape(file.name)}</b><small>${formatBytes(file.size)}</small></span><button type="button" data-remove-selected-file="${index}" aria-label="${escape(file.name)} 제거">제거</button></div>`).join("")}</div>`; }
 function syncSelectedFileList(){ if(state.page!=="add")return; const dropzone=document.querySelector(".dropzone"),heading=dropzone?.querySelector("h3"),input=document.querySelector("#file-input"); if(!dropzone)return; dropzone.querySelector(".selected-files")?.remove(); if(heading&&state.selectedFiles.length)heading.insertAdjacentHTML("afterend",selectedFilesMarkup()); const choose=document.querySelector("#choose-files"); if(choose)choose.textContent=state.selectedFiles.length?"파일 추가":"파일 선택"; input?.addEventListener("change",(event)=>{appendSelectedFiles(event.target.files);event.target.value="";render()}); document.querySelectorAll("[data-remove-selected-file]").forEach((button)=>button.addEventListener("click",()=>{removeSelectedFile(Number(button.dataset.removeSelectedFile));render()})); }
-function syncMockControls(){ if(state.page==="add"){const semanticHealth=state.status?.search?.semantic; const semanticReady=state.status?.runtime?.components?.["semantic-model"]?.status==="ready"&&(semanticHealth==="healthy"||semanticHealth?.status==="healthy"); document.querySelectorAll('input[name="mode"]').forEach((input)=>{const enabled=input.value==="lightweight"||(input.value==="local-ai"&&semanticReady); input.disabled=!enabled; const mode=input.closest(".mode"); if(enabled){mode?.classList.remove("disabled");mode?.removeAttribute("aria-disabled");}else{mode?.classList.add("disabled");mode?.setAttribute("aria-disabled","true");} let status=mode?.querySelector("em"); if(input.value!=="lightweight"){if(!status){status=document.createElement("em");mode?.append(status);}if(status)status.textContent=input.value==="local-ai"?(semanticReady?"사용 가능":"모델 설치 후"):"준비 중";}});} if(state.page==="settings"){const row=document.querySelector(".select-row");row?.classList.add("disabled");row?.setAttribute("aria-disabled","true");const marker=row?.querySelector("span");if(marker)marker.textContent="준비 중";} }
+async function saveProcessingDefault(select){
+  const defaultProcessingMode=select.value;
+  select.disabled=true;
+  try{
+    const response=await fetch("/api/settings",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({defaultProcessingMode})});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||"기본 처리 모드를 저장하지 못했습니다.");
+    state.status={...(state.status||{}),processing:data.processing};
+    state.toast="기본 처리 모드를 저장했습니다.";
+    render();
+  }catch(error){state.toast=error.message||"기본 처리 모드를 저장하지 못했습니다.";render();}
+}
+function syncDefaultProcessingMode(){
+  if(state.page!=="settings")return;
+  const row=document.querySelector(".select-row");
+  if(!row)return;
+  row.classList.remove("disabled");
+  row.removeAttribute("aria-disabled");
+  if(!row.querySelector("#default-processing-mode")){
+    row.innerHTML=`<label for="default-processing-mode">기본 처리 모드</label><select id="default-processing-mode"><option value="auto">${processingDefaultLabels.auto}</option><option value="lightweight">${processingDefaultLabels.lightweight}</option><option value="local-ai">${processingDefaultLabels["local-ai"]}</option></select>`;
+    row.querySelector("select")?.addEventListener("change",(event)=>void saveProcessingDefault(event.currentTarget));
+  }
+  const select=row.querySelector("#default-processing-mode");
+  if(select){
+    select.value=state.status?.processing?.defaultMode||"auto";
+    const semanticReady=state.status?.runtime?.components?.["semantic-model"]?.applied===true;
+    const localOption=select.querySelector('option[value="local-ai"]');
+    if(localOption)localOption.disabled=!semanticReady;
+  }
+  let note=row.parentElement?.querySelector(".processing-mode-note");
+  if(!note){note=document.createElement("p");note.className="muted processing-mode-note";row.parentElement?.append(note);}
+  const processing=state.status?.processing;
+  note.textContent=processing?.effectiveDefaultMode==="local-ai"?"세 구성요소가 모두 준비되어 다음 문서부터 Local AI를 기본으로 사용합니다.":"현재는 경량 처리로 동작합니다. 구성요소 설치가 완료되면 자동으로 Local AI를 사용할 수 있습니다.";
+}
+function syncAdvancedBackupCard(){
+  if(state.page!=="settings")return;
+  const card=[...document.querySelectorAll(".settings-card")].find((item)=>item.querySelector("#backup-passphrase"));
+  if(!card||card.querySelector(".advanced-backup-toggle"))return;
+  const heading=card.querySelector("h2");
+  if(heading)heading.textContent="고급 관리 · 암호화 백업 및 복원";
+  const description=card.querySelector("p.muted");
+  if(description)description.textContent="다른 PC에서 검색 데이터 또는 전체 문서를 복구할 때 사용하는 기능입니다.";
+  const toggle=document.createElement("button");
+  toggle.type="button";toggle.className="secondary advanced-backup-toggle";toggle.textContent="고급 관리 열기";
+  heading?.after(toggle);
+  const body=document.createElement("div");body.className="advanced-backup-body";body.hidden=true;
+  for(const child of [...card.children])if(child!==card.querySelector(".eyebrow")&&child!==heading&&child!==description&&child!==toggle&&child!==body)body.append(child);
+  card.append(body);
+  toggle.addEventListener("click",()=>{body.hidden=!body.hidden;toggle.textContent=body.hidden?"고급 관리 열기":"고급 관리 닫기";});
+}
+function runtimeInstallMetadata(id){
+  const local=state.runtime?.installable?.[id];
+  if(local)return local;
+  const remote=state.myboxRuntime?.data?.runtimeComponents?.find((entry)=>entry?.id===id);
+  return remote?{version:remote.version,sourceType:"mybox",requiresMybox:true}:null;
+}
+function runtimeStatusText(entry){
+  if(entry.status==="ready"&&!entry.applied)return "앱 재시작 필요";
+  if(entry.status==="ready"&&entry.updateAvailable)return "업데이트 가능";
+  if(entry.status==="missing"&&entry.reason==="runtime_pack_not_configured")return entry.requiresMybox?"MYBOX 배포본 없음":"배포 준비 중";
+  return runtimeStatusLabels[entry.status]||healthStatusLabel(entry.status);
+}
+async function installAllRuntimeComponents(button){
+  if(button.disabled||!state.runtime)return;
+  const entries=state.runtime.components||{};
+  const pending=["semantic-model","semantic-reranker","document-renderer"].filter((id)=>{
+    const entry=entries[id];
+    return entry&&((entry.status!=="ready")||entry.updateAvailable)&&runtimeInstallMetadata(id);
+  });
+  if(!pending.length){state.toast="설치 가능한 새 구성요소가 없습니다.";render();return;}
+  if(!confirm("설치 가능한 고품질 검색 구성요소를 순서대로 설치할까요?"))return;
+  button.disabled=true;state.runtimeBatchRequested=true;state.toast="고품질 검색 구성요소를 설치하는 중입니다…";render();
+  startRuntimePolling();
+  try{
+    const response=await fetch("/api/runtime/components/install-all",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({componentIds:pending})});
+    const data=await response.json();
+    state.runtime=data.runtime||state.runtime;
+    if(data.status==="ready")scheduleRuntimeRestart(data);
+    state.toast=response.ok?"고품질 검색 구성요소 설치를 시작했습니다.":data.error||"고품질 검색 구성요소 설치에 실패했습니다.";
+  }catch(error){state.toast=error.message||"고품질 검색 구성요소 설치에 실패했습니다.";}
+  render();
+}
+function enhanceRuntimeCard(card,data){
+  const entries=Object.values(data?.components||{});
+  const description=card.querySelector(".runtime-description")||card.querySelector("p.muted:not(.runtime-restart-hint):not(.runtime-batch-message)");
+  if(description){description.classList.add("runtime-description");description.textContent="세 가지 구성요소를 설치하면 의미 기반 검색과 검색 결과 정렬 품질이 향상됩니다. 필요한 항목만 설치하거나 전체 설치를 선택할 수 있습니다.";}
+  card.querySelectorAll("[data-runtime-install]").forEach((button)=>button.remove());
+  const rows=[...card.querySelectorAll(".engine")].slice(0,entries.length);
+  rows.forEach((row,index)=>{
+    const entry=entries[index];
+    row.dataset.runtimeComponent=entry.id;
+    const label=row.querySelector("b");
+    if(label)label.textContent=runtimeComponentLabels[entry.id]||entry.id;
+    const metadata=runtimeInstallMetadata(entry.id);
+    const action=runtimeAction(entry,metadata);
+    row.querySelector(".runtime-row-action")?.remove();
+    if(!action)return;
+    const button=document.createElement("button");
+    button.type="button";button.className="secondary runtime-row-action";button.textContent=action.label;button.disabled=action.disabled;
+    if(!action.disabled){button.dataset.runtimeInstall="true";button.dataset.runtimeComponent=entry.id;button.dataset.runtimeVersion=metadata.version;button.addEventListener("click",()=>void installRuntimeComponent(button,{componentId:entry.id,version:metadata.version,source:metadata.sourceType==="mybox"?"mybox":null,manifestUrl:data?.manifestUrl||null}));}
+    row.append(button);
+  });
+  const batchNote=runtimeBatchMessage(data?.installBatch)||(data?.installBatch?.status==="partial"?"설치 가능한 구성요소 설치가 완료되었습니다.":"");
+  card.querySelector(".runtime-batch-message")?.remove();
+  if(batchNote){const note=document.createElement("p");note.className="muted runtime-batch-message";note.setAttribute("role","status");note.setAttribute("aria-live","polite");note.textContent=batchNote;card.querySelector("#document-renderer-install-slot")?.before(note);}
+  const restartHint=card.querySelector(".runtime-restart-hint");
+  if(restartHint)restartHint.textContent="설치 후에는 앱을 다시 시작해야 새 구성요소가 적용됩니다.";
+}
+function syncRuntimeCardPresentation(card,data){
+  if(!card)return;
+  const entries=Object.values(data?.components||{});
+  for(const entry of entries){
+    const row=[...card.querySelectorAll(".engine")].find((item)=>item.dataset.runtimeComponent===entry.id);
+    if(!row)continue;
+    const label=row.querySelector("b"),status=row.querySelector("em");
+    if(label)label.textContent=runtimeComponentLabels[entry.id]||entry.id;
+    if(status){const source=entry.requiresMybox?" · MYBOX 배포본":"";status.textContent=`${runtimeStatusText(entry)}${entry.version?` · ${entry.version}`:""}${source}`;}
+  }
+  let button=card.querySelector("[data-runtime-install-all]");
+  if(!button){
+    button=document.createElement("button");button.type="button";button.className="primary runtime-install-all";button.dataset.runtimeInstallAll="true";button.addEventListener("click",()=>void installAllRuntimeComponents(button));
+    card.querySelector("h2")?.after(button);
+  }
+  const allReady=entries.length>=3&&entries.every((entry)=>entry.status==="ready"&&entry.applied&&!entry.updateAvailable);
+  const installing=entries.some((entry)=>entry.status==="installing");
+  const available=entries.some((entry)=>runtimeInstallMetadata(entry.id)&&((entry.status!=="ready")||entry.updateAvailable));
+  const restartRequired=entries.some((entry)=>entry.status==="ready"&&!entry.applied);
+  button.disabled=installing||!available;
+  button.textContent=allReady?"최신 상태":installing?"고품질 구성요소 설치 중…":restartRequired&&!available?"앱 재시작 필요":"전체 설치";
+  if(installing)startRuntimePolling();
+  enhanceRuntimeCard(card,data);
+}
+function syncMockControls(){
+  if(state.page==="add"){
+    const semanticHealth=state.status?.search?.semantic;
+    const semanticReady=state.status?.runtime?.components?.["semantic-model"]?.status==="ready"&&(semanticHealth==="healthy"||semanticHealth?.status==="healthy");
+    const effectiveDefault=state.status?.processing?.effectiveDefaultMode||"lightweight";
+    const defaultInput=document.querySelector(`input[name="mode"][value="${effectiveDefault}"]`);
+    if(defaultInput&&!document.querySelector('input[name="mode"]:checked')?.dataset.userSelected)defaultInput.checked=true;
+    document.querySelectorAll('input[name="mode"]').forEach((input)=>{
+      input.onchange=()=>{input.dataset.userSelected="true";};
+      const enabled=input.value==="lightweight"||(input.value==="local-ai"&&semanticReady);
+      input.disabled=!enabled;
+      const mode=input.closest(".mode");
+      if(enabled){mode?.classList.remove("disabled");mode?.removeAttribute("aria-disabled");}
+      else{mode?.classList.add("disabled");mode?.setAttribute("aria-disabled","true");}
+      let status=mode?.querySelector("em");
+      if(input.value!=="lightweight"){
+        if(!status){status=document.createElement("em");mode?.append(status);}
+        if(status)status.textContent=input.value==="local-ai"?(semanticReady?"사용 가능":"모델 설치 후"):"준비 중";
+      }
+    });
+  }
+  if(state.page==="settings"){
+    syncDefaultProcessingMode();
+    syncAdvancedBackupCard();
+    document.querySelectorAll(".settings-card .engine em").forEach((element)=>{element.textContent=healthStatusLabel(element.textContent.trim());});
+  }
+}
 function syncMyboxCredentialStatus(){ if(state.page!=="settings")return; const card=document.querySelector("#mybox-upload")?.closest(".settings-card"); if(!card)return; card.querySelector(".mybox-credential-message")?.remove(); const credentialState=state.mybox?.credentialState||(!state.mybox?.connected?"missing":"available"); const message=state.mybox?.message||({missing:"MYBOX 토큰이 설정되지 않았습니다. 관리자에게 문의하세요.",unreadable:"MYBOX 토큰을 읽을 수 없습니다. 관리자에게 문의하세요.",invalid:"MYBOX 토큰 검증에 실패했습니다. 관리자에게 문의하세요.",unavailable:"MYBOX 연결을 확인할 수 없습니다. 네트워크 상태를 확인하세요."}[credentialState]||""); if(message&&!state.mybox?.connected){const note=document.createElement("p");note.className="muted mybox-credential-message";note.setAttribute("role","status");note.textContent=message;card.querySelector(".engine")?.after(note);} const blocked=["missing","unreadable","invalid"].includes(credentialState); card.querySelectorAll("#mybox-upload,#mybox-sync").forEach((button)=>{button.disabled=blocked;if(blocked){button.classList.add("disabled");button.setAttribute("aria-disabled","true");}else{button.classList.remove("disabled");button.removeAttribute("aria-disabled");}}); }
 function applyMyboxCredentialResult(editor,result,message){ if(!result?.ok){const target=editor?.querySelector("#mybox-token-message");if(target)target.textContent=result?.error||message;return;} state.mybox={...state.mybox,credentialState:result.state,connected:result.state==="available",message:""}; const row=editor?.querySelector(".engine"),dot=row?.querySelector("span"),label=row?.querySelector("em"),labels={available:"토큰 저장됨",missing:"토큰 미설정",unreadable:"토큰을 읽을 수 없음",invalid:"토큰 검증 실패"}; if(dot)dot.className=result.state==="available"?"good-dot":"bad-dot"; if(label)label.textContent=labels[result.state]||result.state; const target=editor?.querySelector("#mybox-token-message");if(target)target.textContent=message;syncMyboxCredentialStatus(); }
 function syncMyboxCredentialEditor(){ if(state.page!=="settings")return; const upload=document.querySelector("#mybox-upload"),card=upload?.closest(".settings-card"); if(!card||card.querySelector("#mybox-token"))return; const credentialState=state.mybox?.credentialState||"missing",labels={available:"토큰 저장됨",missing:"토큰 미설정",unreadable:"토큰을 읽을 수 없음",invalid:"토큰 검증 실패"}; const editor=document.createElement("div"); editor.className="mybox-credential-editor"; editor.innerHTML=`<div class="engine"><span class="${credentialState==="available"?"good-dot":"bad-dot"}"></span><b>로컬 MYBOX 토큰</b><em>${labels[credentialState]||credentialState}</em></div><p class="muted">토큰은 이 PC의 선택된 Weki 데이터 저장소에만 암호화하여 보관합니다. 값은 화면에 다시 표시하지 않습니다.</p><div class="token-actions"><input id="mybox-token" type="password" placeholder="MYBOX 토큰 입력" autocomplete="off"/><button class="secondary" id="save-mybox-token">토큰 저장</button><button class="secondary" id="clear-mybox-token">저장된 토큰 삭제</button></div><p class="muted" id="mybox-token-message" role="status"></p>`; card.insertBefore(editor,card.querySelector(".maintenance-actions")||null); const bridge=window.wekiCredentials, input=editor.querySelector("#mybox-token"),message=editor.querySelector("#mybox-token-message"),saveButton=editor.querySelector("#save-mybox-token"),clearButton=editor.querySelector("#clear-mybox-token"); if(!bridge){message.textContent="설치된 Weki 앱에서만 토큰을 관리할 수 있습니다."; editor.querySelectorAll("button").forEach((button)=>{button.disabled=true;}); return;} saveButton?.addEventListener("click",async()=>{saveButton.disabled=true;message.textContent="MYBOX 토큰을 저장하고 서버를 재연결하는 중입니다…";try{const result=await bridge.saveToken(input.value);input.value="";applyMyboxCredentialResult(editor,result,result?.ok?(result.applied?"MYBOX 토큰을 저장하고 즉시 적용했습니다.":"MYBOX 토큰을 저장했습니다. Weki를 다시 시작하면 적용됩니다."):result?.error||"MYBOX 토큰 저장에 실패했습니다.");}catch(error){message.textContent=error.message||"MYBOX 토큰 저장에 실패했습니다.";}finally{saveButton.disabled=false;}}); clearButton?.addEventListener("click",async()=>{clearButton.disabled=true;message.textContent="저장된 MYBOX 토큰을 삭제하고 서버를 재연결하는 중입니다…";try{const result=await bridge.clearToken();applyMyboxCredentialResult(editor,result,result?.ok?(result.applied?"저장된 MYBOX 토큰을 삭제하고 즉시 적용했습니다.":"저장된 MYBOX 토큰을 삭제했습니다."):result?.error||"MYBOX 토큰 삭제에 실패했습니다.");}catch(error){message.textContent=error.message||"MYBOX 토큰 삭제에 실패했습니다.";}finally{clearButton.disabled=false;}}); }
-function startRuntimePolling(){ if(state.runtimePollTimer||state.page!=="settings")return; state.runtimePollTimer=setInterval(async()=>{try{const latest=await (await fetch("/api/runtime/components")).json(); state.runtime=latest; state.runtimeLoading=false; await syncRuntimeComponents(); if(!Object.values(latest.components||{}).some((entry)=>entry.status==="installing")){clearInterval(state.runtimePollTimer);state.runtimePollTimer=null;}}catch{}},500); }
+function scheduleRuntimeRestart(batch){
+  if(!state.runtimeBatchRequested||state.runtimeRestartTimer||!shouldAutoRestart(batch,state.jobs))return;
+  state.runtimeBatchRequested=false;
+  state.toast="설치가 완료되었습니다. 3초 후 앱을 다시 시작합니다.";
+  render();
+  state.runtimeRestartTimer=setTimeout(()=>{state.runtimeRestartTimer=null;void restartApp();},3000);
+}
+function startRuntimePolling(){ if(state.runtimePollTimer||state.page!=="settings")return; state.runtimePollTimer=setInterval(async()=>{try{const latest=await (await fetch("/api/runtime/components")).json(); state.runtime=latest; state.runtimeLoading=false; await syncRuntimeComponents(); scheduleRuntimeRestart(latest.installBatch); if(!Object.values(latest.components||{}).some((entry)=>entry.status==="installing")&&latest.installBatch?.status!=="indexing"){clearInterval(state.runtimePollTimer);state.runtimePollTimer=null;}}catch{}},500); }
 function resetMyboxRuntimeCache(){ state.myboxRuntime=null; state.myboxRuntimeFetchedAt=0; }
 async function installRuntimeComponent(button,{componentId,version,source=null,manifestUrl=null}){
   const confirmation=source==="mybox"?"MYBOX runtime manifest에서 document-renderer를 설치할까요?":`${componentId} 구성요소를 다운로드할까요?`;
@@ -174,12 +345,33 @@ async function installRuntimeComponent(button,{componentId,version,source=null,m
   }catch(error){state.toast=error.message||"구성요소 설치에 실패했습니다.";}
   finally{if(isRenderer)state.myboxRendererInstalling=false;render();}
 }
+function mergeMyboxRuntimeCatalog(runtime){
+  if(!state.runtime||!Array.isArray(runtime?.runtimeComponents))return false;
+  let changed=false;
+  state.runtime.installable={...(state.runtime.installable||{})};
+  state.runtime.components={...(state.runtime.components||{})};
+  for(const remote of runtime.runtimeComponents){
+    const id=remote?.id;
+    const current=state.runtime.components[id];
+    if(!id||!current||!runtimeComponentLabels[id])continue;
+    if(!state.runtime.installable[id]||current.status!=="ready"){
+      state.runtime.installable[id]={...(state.runtime.installable[id]||{}),version:remote.version,source:"mybox",sourceType:"mybox",requiresMybox:true};
+      changed=true;
+    }
+    if(current.status!=="ready"&&(current.availableVersion!==remote.version||current.reason==="runtime_pack_not_configured")){
+      state.runtime.components[id]={...current,availableVersion:remote.version,installable:true,source:"mybox",sourceType:"mybox",requiresMybox:true,reason:null};
+      changed=true;
+    }
+  }
+  return changed;
+}
 function applyMyboxRuntimeAction(card,result){
   if(!card||state.page!=="settings")return;
   const slot=card.querySelector("#document-renderer-install-slot");
   if(!slot)return;
   const runtime=result?.data||{};
   const responseOk=result?.ok!==false;
+  if(responseOk&&mergeMyboxRuntimeCatalog(runtime))syncRuntimeCardPresentation(card,state.runtime);
   const rendererStatus=state.runtime?.components?.["document-renderer"]?.status||null;
   const rendererInstallable=["ready","installing"].includes(rendererStatus)?null:state.runtime?.installable?.["document-renderer"]||null;
   const stateKey=JSON.stringify({ok:responseOk,configured:runtime.configured,manifest:runtime.structure?.manifest?.resourceId||null,manifestError:runtime.manifestError||null,components:runtime.runtimeComponents||[],error:runtime.error||null,rendererVersion:rendererInstallable?.version||null,installing:state.myboxRendererInstalling});
@@ -187,14 +379,45 @@ function applyMyboxRuntimeAction(card,result){
   slot.replaceChildren();
   card.dataset.myboxRuntimeState=stateKey;
   const note=(message)=>{const element=document.createElement("p");element.id="mybox-runtime-message";element.className="muted";element.setAttribute("role","status");element.textContent=message;slot.append(element);};
-  const fallback=()=>{if(!rendererInstallable)return false;const install=document.createElement("button");install.className="secondary";install.textContent="document-renderer 설치";install.addEventListener("click",()=>installRuntimeComponent(install,{componentId:"document-renderer",version:rendererInstallable.version,manifestUrl:state.runtime?.manifestUrl||null}));slot.append(install);return true;};
+  const fallback=()=>{if(!rendererInstallable)return false;note("문서 화면 처리기 배포본을 확인했습니다. 위의 전체 설치에서 함께 설치할 수 있습니다.");return true;};
+  if(rendererInstallable){
+    note("문서 화면 처리기 배포본을 확인했습니다. 위의 전체 설치에서 함께 설치할 수 있습니다.");return;
+  }
   if(state.myboxRendererInstalling){note("document-renderer 설치 진행 중입니다. 완료되면 앱을 다시 시작하세요.");return;}
   if(!responseOk||!runtime?.configured){if(!fallback())note(runtime?.error||"MYBOX runtime 배포 상태를 확인할 수 없습니다.");return;}
   if(!runtime?.structure?.manifest){if(!fallback())note("MYBOX에 renderer 배포 manifest가 아직 게시되지 않았습니다. native parser와 OCR fallback을 사용합니다.");return;}
   if(runtime.manifestError){if(!fallback())note(`MYBOX renderer manifest를 읽을 수 없습니다: ${runtime.manifestError}`);return;}
   const renderer=runtime.runtimeComponents?.find((entry)=>entry?.id==="document-renderer");
   if(!renderer){if(!fallback())note("MYBOX runtime manifest에 document-renderer가 없어 native parser와 OCR fallback을 사용합니다.");return;}
-  const install=document.createElement("button");install.className="secondary";install.textContent="document-renderer 설치";install.addEventListener("click",()=>installRuntimeComponent(install,{componentId:"document-renderer",version:renderer.version,source:"mybox"}));slot.append(install);
+  note(`문서 화면 처리기 ${renderer.version} 배포본을 확인했습니다. 위의 전체 설치에서 함께 설치할 수 있습니다.`);
+}
+function startSearchReindexPolling(){
+  if(state.searchReindexPollTimer)return;
+  state.searchReindexPollTimer=setInterval(async()=>{
+    if(state.page!=="settings"){clearInterval(state.searchReindexPollTimer);state.searchReindexPollTimer=null;return;}
+    try{await refresh();render();if(state.searchV2?.reindex?.status!=="indexing"){clearInterval(state.searchReindexPollTimer);state.searchReindexPollTimer=null;}}catch{}
+  },700);
+}
+function syncSearchReindexControls(){
+  if(state.page!=="settings")return;
+  const grid=document.querySelector(".settings-grid");if(!grid)return;
+  let card=document.querySelector("#search-index-maintenance");
+  if(!card){card=document.createElement("section");card.id="search-index-maintenance";card.className="settings-card span2";grid.append(card);}
+  const reindex=state.searchV2?.reindex||{status:"idle",total:0,completed:0,failed:0};
+  const indexing=reindex.status==="indexing";
+  const stateLabel={idle:"대기",indexing:"재생성 중",ready:"최신 상태",failed:"실패"}[reindex.status]||reindex.status||"확인 중";
+  const progress=reindex.total?`${reindex.completed||0}/${reindex.total}`:"문서 없음";
+  const engine=state.searchV2?.engines?.semantic?.status||state.searchV2?.engines?.ann?.status||"확인 중";
+  card.innerHTML=`<p class="eyebrow">SEARCH INDEX</p><h2>검색 색인 관리</h2><p class="muted">문서가 많거나 검색 결과가 최신 문서와 맞지 않을 때 전체 색인을 다시 만듭니다. 기존 색인은 새 색인이 검증될 때까지 유지됩니다.</p><div class="engine" aria-live="polite"><span class="${indexing?"pulse":reindex.status==="failed"?"bad-dot":"good-dot"}"></span><b>전체 색인 상태</b><em>${stateLabel} · ${progress}</em></div><div class="engine"><span class="${engine==="healthy"||engine==="ready"?"good-dot":"bad-dot"}"></span><b>Vector Search</b><em>${escape(engine)}</em></div>${reindex.error?`<p class="muted" role="status">${escape(reindex.error)}</p>`:""}<div class="maintenance-actions"><button class="secondary ${indexing?"disabled":""}" id="reindex-search" ${indexing?"disabled":""}>${indexing?"검색 색인 재생성 중…":"검색 색인 다시 만들기"}</button></div>`;
+  if(indexing)startSearchReindexPolling();
+  card.querySelector("#reindex-search")?.addEventListener("click",async(event)=>{
+    const button=event.currentTarget;
+    if(button.disabled||state.searchV2?.reindex?.status==="indexing")return;
+    if(!confirm("전체 검색 색인을 다시 만들까요? 문서 수에 따라 시간이 걸릴 수 있습니다."))return;
+    button.disabled=true;state.toast="전체 검색 색인 생성을 시작했습니다.";render();
+    try{const response=await fetch("/api/v2/search/reindex",{method:"POST"}),data=await response.json();state.searchV2={...(state.searchV2||{}),reindex:data};state.toast=response.ok?"전체 검색 색인을 생성하는 중입니다.":data.error||"검색 색인 재생성에 실패했습니다.";await refresh();render();if(response.ok&&state.searchV2?.reindex?.status==="indexing")startSearchReindexPolling();}
+    catch(error){state.toast=error.message||"검색 색인 재생성에 실패했습니다.";await refresh().catch(()=>{});render();}
+  });
 }
 async function syncMyboxRuntimeAction(card,{force=false}={}){
   if(!card||state.page!=="settings")return;
@@ -214,11 +437,11 @@ async function syncRuntimeComponents(){
   if(state.page!=="settings")return;
   const grid=document.querySelector(".settings-grid"); if(!grid)return;
   let card=document.querySelector("#runtime-components-card");
-  const updateCard=(data)=>{ const entries=Object.values(data?.components||{}), installable=data?.installable||{}; const statusLabel={ready:"준비됨",missing:"미설치",installing:"다운로드 중",failed:"설치 실패",unavailable:"사용 불가"}; const dotClass=(entry)=>entry.status==="ready"?"good-dot":entry.status==="failed"||entry.status==="missing"||entry.status==="unavailable"?"bad-dot":"processing-dot"; const installButtons=entries.filter((entry)=>entry.id!=="document-renderer"&&entry.status!=="ready"&&installable[entry.id]).map((entry)=>`<button class="secondary" data-runtime-install data-runtime-component="${escape(entry.id)}" data-runtime-version="${escape(installable[entry.id].version)}">${escape(entry.id)} 설치</button>`).join(""); const installControls=installButtons||(entries.some((entry)=>entry.id==="document-renderer")?"":`<p class="muted" role="status">현재 설치 가능한 선택형 구성요소가 없습니다.</p>`); const progress=entries.filter((entry)=>entry.status==="installing").map((entry)=>`<div class="runtime-progress" role="status"><b>${escape(entry.currentFile||entry.id)} 다운로드 중</b><span>${entry.completedFiles||0}/${entry.totalFiles||0} 파일 · ${entry.progress||0}%</span><i><em style="width:${entry.progress||0}%"></em></i></div>`).join(""); card.innerHTML=`<p class="eyebrow">OPTIONAL RUNTIME PACKS</p><h2>고품질 검색 구성요소</h2><p class="muted">semantic-model은 의미 검색용 모델입니다. document-renderer는 별도 공급 manifest가 있어야 설치할 수 있으며, 없을 때는 native parser와 OCR로 계속 처리합니다.</p>${entries.map((entry)=>`<div class="engine"><span class="${dotClass(entry)}"></span><b>${escape(entry.id)}</b><em>${escape(statusLabel[entry.status]||entry.status)}${entry.version?` · ${escape(entry.version)}`:""}${entry.reason==="runtime_pack_not_configured"?" · 배포 팩 없음":""}</em></div>`).join("")}${progress}${installControls}<div id="document-renderer-install-slot"></div>${entries.some((entry)=>entry.status==="ready"&&entry.id==="semantic-model")?`<p class="muted">의미 검색 모델이 준비되었습니다. 문서 등록에서 Local AI 허용을 선택할 수 있습니다.</p>`:""}<p class="muted runtime-restart-hint" role="status">구성요소 설치가 끝나면 우측 상단의 “앱 다시 시작” 버튼을 눌러 적용하세요.</p>`; card.querySelectorAll("[data-runtime-install]").forEach((button)=>button.addEventListener("click",()=>installRuntimeComponent(button,{componentId:button.dataset.runtimeComponent,version:button.dataset.runtimeVersion,manifestUrl:data?.manifestUrl||null}))); };
+  const updateCard=(data)=>{ const entries=Object.values(data?.components||{}), installable=data?.installable||{}; const statusLabel={ready:"준비됨",missing:"미설치",installing:"다운로드 중",failed:"설치 실패",unavailable:"사용 불가"}; const dotClass=(entry)=>entry.status==="ready"?"good-dot":entry.status==="failed"||entry.status==="missing"||entry.status==="unavailable"?"bad-dot":"processing-dot"; const installButtons=entries.filter((entry)=>entry.id!=="document-renderer"&&entry.status!=="ready"&&installable[entry.id]).map((entry)=>`<button class="secondary" data-runtime-install data-runtime-component="${escape(entry.id)}" data-runtime-version="${escape(installable[entry.id].version)}">${escape(entry.id)} 설치</button>`).join(""); const installControls=installButtons||(entries.some((entry)=>entry.id==="document-renderer")?"":`<p class="muted" role="status">현재 설치 가능한 선택형 구성요소가 없습니다.</p>`); const progress=entries.filter((entry)=>entry.status==="installing").map((entry)=>`<div class="runtime-progress" role="status"><b>${escape(entry.currentFile||entry.id)} 다운로드 중</b><span>${entry.completedFiles||0}/${entry.totalFiles||0} 파일 · ${entry.progress||0}%</span><i><em style="width:${entry.progress||0}%"></em></i></div>`).join(""); card.innerHTML=`<p class="eyebrow">OPTIONAL RUNTIME PACKS</p><h2>고품질 검색 구성요소</h2><p class="muted">semantic-model은 의미 검색용 모델입니다. document-renderer는 별도 공급 manifest가 있어야 설치할 수 있으며, 없을 때는 native parser와 OCR로 계속 처리합니다.</p>${entries.map((entry)=>`<div class="engine" data-runtime-component="${escape(entry.id)}"><span class="${dotClass(entry)}"></span><b>${escape(entry.id)}</b><em>${escape(statusLabel[entry.status]||entry.status)}${entry.version?` · ${escape(entry.version)}`:""}${entry.reason==="runtime_pack_not_configured"?" · 배포 팩 없음":""}</em></div>`).join("")}${progress}${installControls}<div id="document-renderer-install-slot"></div>${entries.some((entry)=>entry.status==="ready"&&entry.id==="semantic-model")?`<p class="muted">의미 검색 모델이 준비되었습니다. 문서 등록에서 Local AI 허용을 선택할 수 있습니다.</p>`:""}<p class="muted runtime-restart-hint" role="status">구성요소 설치가 끝나면 우측 상단의 “앱 다시 시작” 버튼을 눌러 적용하세요.</p>`; card.querySelectorAll("[data-runtime-install]").forEach((button)=>button.addEventListener("click",()=>installRuntimeComponent(button,{componentId:button.dataset.runtimeComponent,version:button.dataset.runtimeVersion,manifestUrl:data?.manifestUrl||null}))); };
   if(!card){ card=document.createElement("section"); card.id="runtime-components-card"; card.className="settings-card span2"; grid.prepend(card); }
-  if(state.runtime){updateCard(state.runtime);void syncMyboxRuntimeAction(card);}
+   if(state.runtime){updateCard(state.runtime);syncRuntimeCardPresentation(card,state.runtime);void syncMyboxRuntimeAction(card);}
   if(state.runtimeLoading)return;
-  state.runtimeLoading=true; try{const data=await (await fetch("/api/runtime/components")).json(); state.runtime=data; updateCard(data); void syncMyboxRuntimeAction(card); if(Object.values(data.components||{}).some((entry)=>entry.status==="installing"))startRuntimePolling();}catch{} finally{state.runtimeLoading=false;}
+   state.runtimeLoading=true; try{const data=await (await fetch("/api/runtime/components")).json(); state.runtime=data; updateCard(data); syncRuntimeCardPresentation(card,data); void syncMyboxRuntimeAction(card); if(Object.values(data.components||{}).some((entry)=>entry.status==="installing"))startRuntimePolling();}catch{} finally{state.runtimeLoading=false;}
 }
 function syncBrandIcon(){ const mark=document.querySelector(".brand-mark"); if(mark&&!mark.querySelector("img"))mark.innerHTML='<img src="/app-icon.png" alt="" />'; }
 function syncMoreResults(){ const previous=document.querySelector("[data-more-results]"); previous?.remove(); if(state.page!=="search"||!state.searchHasMore||state.loading)return; const results=document.querySelector(".results"); if(!results)return; const button=document.createElement("button"); button.className="secondary more-results"; button.dataset.moreResults="true"; button.textContent="더 보기"; button.addEventListener("click",()=>runSearch(true)); results.after(button); }
