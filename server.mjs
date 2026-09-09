@@ -979,6 +979,7 @@ async function runtimeInstallOptions(componentId, version) {
       const loaded = await readMyboxRuntimeManifest();
       const entry = loaded.manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
       if (entry) return { manifest: loaded.manifest, version: entry.version, sourceType: "mybox", source: loaded.manifest.source || "mybox", baseUrl: `mybox://runtime/${encodeURIComponent(componentId)}/${encodeURIComponent(entry.version)}/`, fetchImpl: myboxRuntimeSource({ structure: loaded.structure, componentId, version: entry.version }) };
+      myboxUnavailable = new RuntimePackUnavailableError(`MYBOX runtime component이 설정되지 않았습니다: ${componentId}`);
     }
   } catch (error) {
     if (!(error instanceof RuntimePackUnavailableError)) throw error;
@@ -1092,7 +1093,8 @@ app.post("/api/runtime/components/install", async (req, res) => {
 });
 app.post("/api/runtime/components/install-all", async (req, res) => {
   const requested = Array.isArray(req.body?.componentIds) ? req.body.componentIds.map((id) => String(id)) : optionalRuntimeComponents;
-  const componentIds = [...new Set(requested)].filter((id) => optionalRuntimeComponents.includes(id));
+  const requestedIds = new Set(requested);
+  const componentIds = optionalRuntimeComponents.filter((id) => requestedIds.has(id));
   if (!componentIds.length) return res.status(400).json({ error: "설치할 구성요소가 없습니다." });
   if (runtimeInstallBatchPromise) return res.status(202).json({ ...runtimeInstallBatchState, runtime: await runtimeStatus() });
   void startRuntimeInstallBatch(componentIds);

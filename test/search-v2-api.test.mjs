@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSearchStore } from "../src/search/sqlite-store.mjs";
-import { runtimeAction } from "../src/runtime/presentation.mjs";
+import { runtimeAction, runtimeBatchMessage } from "../src/runtime/presentation.mjs";
 import { DEFAULT_RUNTIME_MANIFEST } from "../src/runtime/semantic-manifest.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -437,10 +437,11 @@ test("ordered runtime install uses bundled transport after the default manifest 
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ componentIds: ["semantic-model", "semantic-reranker"] }),
+    body: JSON.stringify({ componentIds: ["semantic-reranker", "semantic-model"] }),
   });
   const queued = await response.json();
   assert.equal(response.status, 202, JSON.stringify(queued));
+  assert.deepEqual(queued.runtime.installBatch.componentIds, ["semantic-model", "semantic-reranker"]);
   let runtime = queued.runtime;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     runtime = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
@@ -544,6 +545,58 @@ test("MYBOX manifest parse failures remain failed with their concrete error", as
   assert.match(runtime.installBatch.results["document-renderer"].error, /MYBOX runtime manifest를 읽을 수 없습니다/);
   assert.equal(runtime.installBatch.failed[0].id, "document-renderer");
   assert.equal(runtime.installBatch.unavailable.length, 0);
+});
+
+test("valid MYBOX manifests without the requested component are unavailable", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-mybox-missing-component-"));
+  const manifest = {
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "mybox",
+    components: [{
+      id: "semantic-reranker",
+      version: "1.0.0",
+      files: [{ path: "reranker.mjs", size: 0, sha256: "0".repeat(64) }],
+    }],
+  };
+  let apiBase = "";
+  const provider = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+    if (url.pathname === "/v1/drive/resources") return json({ resources: [{ resourceId: "wiki-id", name: "wiki", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/wiki-id/resources") return json({ resources: [{ resourceId: "runtime-id", name: "runtime", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/runtime-id/resources") return json({ resources: [{ resourceId: "v1-id", name: "v1", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/v1-id/resources") return json({ resources: [{ resourceId: "manifest-id", name: "manifest.json", type: "file" }] });
+    if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/v1/mybox-manifest` });
+    if (url.pathname === "/v1/mybox-manifest") return json(manifest);
+    res.statusCode = 404;
+    return res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  apiBase = `http://127.0.0.1:${provider.address().port}`;
+  const server = await startServer(dataDir, { env: { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: `${apiBase}/v1` } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["document-renderer"] }),
+  });
+  assert.equal(response.status, 202);
+  let runtime = (await response.json()).runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  const batch = runtime.installBatch;
+  assert.equal(batch.status, "partial", JSON.stringify(batch));
+  assert.deepEqual(batch.results["document-renderer"], { status: "unavailable", reason: "runtime_pack_not_configured" });
+  assert.deepEqual(batch.unavailable, ["document-renderer"]);
+  assert.deepEqual(batch.failed, []);
+  assert.equal(runtime.components["document-renderer"].reason, "runtime_pack_not_configured");
+  assert.match(runtimeBatchMessage(batch), /MYBOX 배포본/);
 });
 
 test("clean installs keep the document renderer uninstalled until a runtime pack is present", async (t) => {
