@@ -1,3 +1,22 @@
+# Weki v1.2.0
+
+## RAG/vector search release
+
+- SQLite FTS와 vector search를 결합한 RAG 검색
+- Text/Table/Visual Evidence 기반 bounded Context Pack
+- 선택형 semantic reranker 및 미설치 시 RRF fallback
+- 한국어·OCR 청킹 개선과 검색 품질 평가 CLI
+- Electron 설정 화면의 전체 검색 색인 재생성 및 진행 상태
+- semantic model·semantic reranker·document renderer 3개 runtime 구성요소의 상태 표시와 설치 가능한 항목 일괄 설치
+- semantic-reranker bundled pack(982 bytes, SHA-256 `31db99da8c2d7c8a1df461ffe652fe2e29d14505a455edbbe6cd5364686e842e`)의 설치 검증과 실제 오류·재시도 안내
+- document-renderer는 MYBOX 전용이며 `MYBOX 배포본 없음`은 비실패 상태입니다. 성공한 구성요소는 renderer unavailable 상태에서도 재시작 적용할 수 있고, 실제 실패 시 자동 재시작하지 않습니다.
+- 설치 상태에 따라 자동으로 동작하는 기본 처리 모드와, 구성요소 적용 후 새 문서부터 Local AI를 기본으로 사용하는 흐름
+- 암호화 백업 및 복원을 고급 관리 영역으로 정리하고, 구성요소·검색 엔진 상태를 쉬운 한국어로 표시
+
+Windows installer: `Weki-1.2.0-Setup.exe`
+
+---
+
 # Weki v1.1.0
 
 - 제품명: Weki

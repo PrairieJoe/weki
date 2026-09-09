@@ -1,14 +1,14 @@
-Source commit: ffdd224
-Build date/time: 2026-09-08 22:30:36 +09:00
-Application version: 1.1.0
-Installer file name: Weki-1.1.0-Setup.exe
-Installer size: 232086352 bytes
-Installer path (external archive): GitHub Release v1.1.0
-Installer SHA-256: 25DD37A62609CAD9525EA129F65A3A9C63681DB41D78C6E58E91C64D3F887216
-Installer SHA-512: FCA56B85FD294B862CF5D00520CD7FFB545F1B51BFE9B77561F159B6ADDFCD0060F994E4FFE03549AE7947342ACEE0DC4E0EE32CDA469CAE1894EBFDCE782F1A
-npm test: PASS (140 passed, 0 failed, 1 skipped)
+Source state: working tree (uncommitted)
+Build date/time: 2026-09-09 19:13:10 +09:00
+Application version: 1.2.0
+Installer file name: Weki-1.2.0-Setup.exe
+Installer size: 232096040 bytes
+Installer path: release/Weki-1.2.0-Setup.exe
+Installer SHA-256: B16060C7372277AE66D1F0AC96B2B55579FFF83861B2488050B9DE8FE8529F20
+Installer SHA-512: 2DF6DF9ACEDC3FDEA23B092CFBBA8313BCD7360754AB3A091389A2B208A8F49E01DF6C7F4A4641BB41E4B8D8015FB3E3A2F8F593956AC1B9FA418A07069A32C3
+npm test: PASS (174 passed, 0 failed, 0 skipped)
 npm run test:e2e: SKIPPED (1 environment-gated test)
 npm run build: PASS
 electron-builder --win nsis: PASS
-Packaging check: PASS (packaged version 1.1.0; app.asar, renderer output and entrypoints present)
-Release status: FINAL 1.1.0
+Packaging check: PASS (packaged version 1.2.0; app.asar, renderer output, bundled reranker path and entrypoints present)
+Release status: FINAL 1.2.0

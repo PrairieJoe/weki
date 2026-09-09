@@ -1,5 +1,29 @@
 # Weki 변경 이력
 
+## v1.2.0 - 2026-09-09
+
+### RAG 및 검색 운영
+
+- SQLite FTS와 vector search를 결합하고 모델·세대·문서 필터와 RRF 결과 결합을 적용했습니다.
+- Text/Table/Visual Evidence를 기반으로 bounded Evidence Context Pack을 제공합니다.
+- 선택형 semantic reranker runtime adapter와 미설치 시 RRF fallback을 추가했습니다.
+- 한국어·OCR 문장 경계를 고려한 chunking과 Recall@K·MRR·Evidence Precision 평가 CLI를 추가했습니다.
+- 설정 · 운영 화면에서 전체 검색 색인을 다시 만들고 진행 상태를 확인할 수 있습니다.
+
+### 설정 및 사용자 흐름
+
+- 의미 검색 모델, 검색 결과 재정렬 모델, 문서 화면 처리기의 3개 runtime 구성요소를 설정 화면에 항상 표시합니다. 배포본이 없는 항목도 숨기지 않고 `배포 준비 중`으로 안내하며, 설치 가능한 항목만 `전체 설치` 대상에 포함합니다.
+- `semantic-reranker`는 설치파일에 bundled runtime pack으로 포함되며, 982 bytes와 SHA-256 `31db99da8c2d7c8a1df461ffe652fe2e29d14505a455edbbe6cd5364686e842e`를 검증합니다. 검증·설치에 실패하면 실제 오류 원인과 `재시도` 경로를 표시합니다.
+- `document-renderer`는 MYBOX 전용으로 유지하며, `MYBOX 배포본 없음`은 실패가 아닌 보류 상태로 표시합니다. renderer를 사용할 수 없어도 성공한 설치 가능 구성요소는 적용을 위해 재시작할 수 있고, 실제 설치 실패가 있을 때는 자동 재시작하지 않습니다.
+- `전체 설치`는 semantic model → semantic reranker → document renderer 순서로 진행하고, 동일 버전 재설치를 막으며 새 버전이 있을 때만 업데이트 대상으로 표시합니다. 설치 후 앱 재시작이 필요한 상태도 구분합니다.
+- 기본 처리 모드에 `설치 상태에 따라 자동`과 `Local AI 사용`을 제공했습니다. 3개 구성요소가 모두 준비·적용되기 전에는 경량 처리로 유지하고, 기존 문서를 자동 재처리하지 않은 채 새 작업부터 Local AI를 기본으로 사용할 수 있습니다.
+- 암호화 백업 및 복원은 `고급 관리` 영역으로 접어 기본 화면의 복잡도를 줄이고, 다른 PC에서 검색 데이터 또는 전체 문서를 복구하는 기능이라는 목적을 표시합니다.
+- 설정 화면의 내부 상태값 `healthy`·`degraded` 등을 비전공자도 이해하기 쉬운 한국어 상태 문구로 표시합니다.
+
+### 릴리스
+
+- Electron Windows NSIS 설치파일을 `Weki-1.2.0-Setup.exe`로 승격합니다.
+
 ## v1.1.0 - 2026-09-08
 
 기준점은 Git 태그 `v1.0.0`입니다. 아래 내용은 해당 태그 이후 구현되어 `v1.1.0`에 포함된 변경사항입니다.
@@ -46,4 +70,4 @@ npm run test:e2e
 npm run dist:win
 ```
 
-검증 결과는 Node 테스트 140건 통과, 0건 실패, 1건 환경 조건 skip이며, Vite production build와 Windows x64 NSIS 패키징이 통과했습니다. Electron 시각 문서 E2E 1건은 현재 실행 환경에서 조건부 skip되었습니다. 현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.
+현재 재검증 결과는 Node 테스트 169건 통과, 0건 실패, 0건 skip입니다. Electron 시각 문서 E2E는 저장소의 기본 PDF fixture를 사용해 `npm test`에서 자동 실행되며, Vite production build와 Windows x64 NSIS 패키징 검증도 유지됩니다. 현재 변경분의 상세 실행 방법과 의도적인 제한은 [WEKI_VNEXT_STAGE1.md](./WEKI_VNEXT_STAGE1.md)와 [WEKI_VNEXT_STAGE2.md](./WEKI_VNEXT_STAGE2.md)에 정리되어 있습니다.
