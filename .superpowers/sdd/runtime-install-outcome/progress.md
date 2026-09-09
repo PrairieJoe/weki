@@ -51,3 +51,4 @@
 - Final review fix: commit `ee1f17c` corrected the default semantic-model provenance to public Hugging Face, kept only the file-backed reranker bundled, and expanded synonym searches to pageSize 200 so merged pagination is complete; the full focused suite passed 107/107.
 - Final review fix: commit `5b22e06` aligned the UI contract assertion with semantic-reranker restart requirements.
 - Reproducibility fix: rebuilt the installer from a clean archive of `5b22e06`, copied that artifact into `release/`, updated `BUILD_INFO.txt`, `SHA256.txt`, and `latest.yml`, and verified the clean package ASAR contains the 982-byte reranker with the expected hash once.
+- Final verification: `npm test` passed 184/184 with 0 failures and 0 skips; `git diff --check` remained clean for the planned changes.
