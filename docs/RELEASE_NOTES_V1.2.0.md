@@ -33,5 +33,5 @@ Weki v1.2.0은 v1.1.0의 로컬·경량 검색 흐름을 유지하면서, 검색
 - Node 전체 테스트: 184 passed, 0 failed, 0 skipped
 - 집중 runtime·검색·UI 테스트: 107 passed, 0 failed, 0 skipped
 - Vite production build 및 clean HEAD 기준 Windows x64 NSIS 설치파일 생성 완료
+- 설치파일: `Weki-1.2.0-Setup.exe` · SHA-256 `FAD99238A2EFA11E264DF62146ED53FC3CD25C496EA2283A65A043FCBBC95A4F`
 - 설치파일과 SHA-256/SHA-512 메타데이터: [`release/BUILD_INFO.txt`](../release/BUILD_INFO.txt), [`release/SHA256.txt`](../release/SHA256.txt), [`release/latest.yml`](../release/latest.yml)
-
