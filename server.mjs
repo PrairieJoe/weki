@@ -1020,7 +1020,7 @@ function startRuntimeInstallBatch(componentIds) {
         options = await runtimeInstallOptions(componentId, current?.availableVersion || null);
       } catch (error) {
         if (!(error instanceof RuntimePackUnavailableError)) {
-          if (componentId === "document-renderer") await persistComponentFailure({ rootDirectory: runtimeRoot, componentId, version: current?.availableVersion || null, error, sourceType: "mybox", source: "mybox", requiresMybox: true });
+          await persistComponentFailure({ rootDirectory: runtimeRoot, componentId, version: current?.availableVersion || current?.version || null, error, sourceType: current?.sourceType || null, source: current?.source || null, requiresMybox: current?.requiresMybox ?? false });
           runtimeInstallBatchState.results[componentId] = { status: "failed", error: error.message };
           runtimeInstallBatchState.failed.push({ id: componentId, error: error.message });
           runtimeInstallBatchState.completed += 1;
@@ -1119,14 +1119,14 @@ app.post("/api/runtime/components/:id/retry", async (req, res) => {
     let baseUrl = null;
     const sourceType = body.source === "mybox" || manifest?.source === "mybox" ? "mybox" : "public";
     let source = manifest?.source || null;
-    if (!body.version) return res.status(400).json({ error: sourceType === "mybox" ? "MYBOX 재시도에는 version이 필요합니다." : "재시도에는 manifest와 version이 필요합니다." });
-    const version = String(body.version);
-    if (sourceType !== "mybox" && !manifest) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
+    let version = body.version ? String(body.version) : null;
+    if (sourceType !== "mybox" && (!manifest || !version)) return res.status(400).json({ error: "재시도에는 manifest와 version이 필요합니다." });
     if (sourceType === "mybox") {
       const loaded = await readMyboxRuntimeManifest();
       manifest = loaded.manifest;
       const selected = manifest.components?.find((entry) => entry.id === req.params.id);
       if (!selected) throw new Error(`MYBOX runtime component not found: ${req.params.id}`);
+      version = version || selected.version;
       if (version !== selected.version) throw new Error(`MYBOX runtime component version not found: ${req.params.id}@${version}`);
       fetchImpl = myboxRuntimeSource({ structure: loaded.structure, componentId: selected.id, version: selected.version });
       baseUrl = `mybox://runtime/${encodeURIComponent(selected.id)}/${encodeURIComponent(selected.version)}/`;

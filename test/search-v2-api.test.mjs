@@ -533,6 +533,81 @@ test("runtime install batch continues after a real reranker failure", async (t) 
   assert.ok(batch.finishedAt);
 });
 
+test("runtime install batch persists non-unavailable resolver failures for every optional component", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-resolver-failure-state-"));
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "manifest.json"), JSON.stringify({
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "mybox",
+    components: ["semantic-model", "semantic-reranker", "document-renderer"].map((id) => ({
+      id,
+      version: "2.0.0",
+      files: [{ path: `${id}.bin`, size: 0, sha256: "0".repeat(64) }],
+    })),
+  }));
+  await fs.writeFile(path.join(runtimeDir, "component-state.json"), JSON.stringify({
+    format: "weki-runtime-state",
+    version: 1,
+    components: Object.fromEntries(["semantic-model", "semantic-reranker", "document-renderer"].map((id) => [id, {
+      id,
+      status: "failed",
+      version: null,
+      sourceType: "mybox",
+      source: "existing-source-metadata",
+      requiresMybox: true,
+      reason: "runtime_install_failed",
+      error: "previous resolver failure",
+    }])),
+  }));
+  let apiBase = "";
+  const provider = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+    if (url.pathname === "/v1/drive/resources") return json({ resources: [{ resourceId: "wiki-id", name: "wiki", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/wiki-id/resources") return json({ resources: [{ resourceId: "runtime-id", name: "runtime", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/runtime-id/resources") return json({ resources: [{ resourceId: "v1-id", name: "v1", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/v1-id/resources") return json({ resources: [{ resourceId: "manifest-id", name: "manifest.json", type: "file" }] });
+    if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/v1/malformed-manifest` });
+    if (url.pathname === "/v1/malformed-manifest") { res.setHeader("Content-Type", "application/json"); return res.end("{malformed"); }
+    res.statusCode = 404;
+    return res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  apiBase = `http://127.0.0.1:${provider.address().port}`;
+  const server = await startServer(dataDir, { env: { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: `${apiBase}/v1` } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["semantic-model", "semantic-reranker", "document-renderer"] }),
+  });
+  assert.equal(response.status, 202);
+  let runtime = (await response.json()).runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  assert.equal(runtime.installBatch.status, "failed", JSON.stringify(runtime.installBatch));
+  assert.deepEqual(runtime.installBatch.failed.map((entry) => entry.id), ["semantic-model", "semantic-reranker", "document-renderer"]);
+  assert.deepEqual(runtime.installBatch.unavailable, []);
+
+  const persisted = JSON.parse(await fs.readFile(path.join(runtimeDir, "component-state.json"), "utf8"));
+  for (const id of ["semantic-model", "semantic-reranker", "document-renderer"]) {
+    const component = persisted.components[id];
+    assert.equal(component.status, "failed");
+    assert.equal(component.version, "2.0.0");
+    assert.equal(component.sourceType, "mybox");
+    assert.equal(component.source, "existing-source-metadata");
+    assert.equal(component.requiresMybox, true);
+    assert.match(component.error, /MYBOX runtime manifest를 읽을 수 없습니다/);
+  }
+});
+
 test("MYBOX manifest parse failures remain failed with their concrete error", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-mybox-manifest-failure-"));
   let apiBase = "";
@@ -580,6 +655,26 @@ test("MYBOX manifest parse failures remain failed with their concrete error", as
   assert.equal(renderer.installable, true);
   assert.equal(refreshed.installable["document-renderer"].sourceType, "mybox");
   assert.deepEqual(runtimeAction(renderer, refreshed.installable["document-renderer"]), { label: "재시도", disabled: false });
+  const persisted = JSON.parse(await fs.readFile(path.join(dataDir, "runtime", "v1", "component-state.json"), "utf8"));
+  assert.equal(persisted.components["document-renderer"].version, null);
+  assert.equal(persisted.components["document-renderer"].sourceType, "mybox");
+});
+
+test("public runtime retry still requires a manifest and version", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-public-retry-validation-"));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  for (const body of [{ source: "public", version: "1.0.0" }, { source: "public", manifest: DEFAULT_RUNTIME_MANIFEST }]) {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/semantic-reranker/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    assert.equal(response.status, 400, JSON.stringify(result));
+    assert.equal(result.error, "재시도에는 manifest와 version이 필요합니다.");
+  }
 });
 
 test("valid MYBOX manifests without the requested component are unavailable", async (t) => {
@@ -723,14 +818,6 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   assert.equal(failedRenderer.installable, true);
   assert.deepEqual(runtimeAction(failedRenderer, failedBody.runtime.installable["document-renderer"]), { label: "재시도", disabled: false });
 
-  const missingVersion = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source: "mybox" }),
-  });
-  const missingVersionBody = await missingVersion.json();
-  assert.equal(missingVersion.status, 400);
-  assert.equal(missingVersionBody.error, "MYBOX 재시도에는 version이 필요합니다.");
   remoteManifest = manifest;
 
   const spoofedRetry = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
@@ -745,7 +832,7 @@ test("MYBOX renderer retry uses the MYBOX transport for relative runtime files",
   const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/document-renderer/retry`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source: "mybox", version: "1.0.0" }),
+    body: JSON.stringify({ source: "mybox" }),
   });
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));

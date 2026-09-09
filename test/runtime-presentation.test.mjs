@@ -14,7 +14,7 @@ test("runtime actions use Korean labels and disable latest components", () => {
 
 test("document-renderer actions require a MYBOX source", () => {
   assert.deepEqual(runtimeAction({ id: "document-renderer", status: "missing" }, { version: "1.0.0", sourceType: "mybox" }), { label: "설치", disabled: false });
-  assert.deepEqual(runtimeAction({ id: "document-renderer", status: "failed" }, { version: "1.0.0", sourceType: "mybox" }), { label: "재시도", disabled: false });
+  assert.deepEqual(runtimeAction({ id: "document-renderer", status: "failed" }, { sourceType: "mybox" }), { label: "재시도", disabled: false });
   assert.equal(runtimeAction({ id: "document-renderer", status: "missing" }, { version: "1.0.0", sourceType: "public" }), null);
   assert.equal(runtimeAction({ id: "document-renderer", status: "failed" }, { version: "1.0.0", sourceType: "bundled" }), null);
 });
