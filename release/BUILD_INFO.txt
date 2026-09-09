@@ -1,13 +1,13 @@
-Source state: working tree (uncommitted)
-Build date/time: 2026-09-09 22:26:26 +09:00
+Source state: main at ee1f17c plus preserved prior-session working-tree changes
+Build date/time: 2026-09-09 22:38:40 +09:00
 Application version: 1.2.0
 Installer file name: Weki-1.2.0-Setup.exe
-Installer size: 232097851 bytes
+Installer size: 232098076 bytes
 Installer path: release/Weki-1.2.0-Setup.exe
-Installer SHA-256: 5354549005AA2763E25E9295F1DF91F4F7B1B12E0828D77A92E50F677E333ADF
-Installer SHA-512: 7B68E148C2C35CADC79B59B05CF29101C0E4DA498FD03038DDFDF90FD4F27062654AE0E3185E3246724CC266315A72F9A8EA02555C2B1B06CAD8C33C79DD4846
+Installer SHA-256: 0C990B2C0F2C8B82F84F93733DDD9CB19A3ABF060B083B06EC85EDB0FFFBDB7F
+Installer SHA-512: 6DB9CFD272E0B0F0C970CA0CFC316B4AE7FE4FAE6B71ED6D656344CBD4B7E01CF13C597AACD7A389E2D303A7201F72685006CFD07B707E9742509BBF489348A4
 npm test: 176 passed, 1 environment-flaky status-api startup failure (177 total)
-npm runtime-focused suite: PASS (106 passed, 0 failed, 0 skipped)
+npm runtime-focused suite: PASS (107 passed, 0 failed, 0 skipped)
 npm run test:e2e: SKIPPED (1 environment-gated test)
 npm run build: PASS
 electron-builder --win nsis: PASS
