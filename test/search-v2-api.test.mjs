@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSearchStore } from "../src/search/sqlite-store.mjs";
 import { runtimeAction } from "../src/runtime/presentation.mjs";
+import { DEFAULT_RUNTIME_MANIFEST } from "../src/runtime/semantic-manifest.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 async function freePort() {
@@ -421,6 +422,44 @@ test("runtime install batch records an unavailable renderer and a successful bun
   assert.ok(batch.unavailable.includes("document-renderer"));
 });
 
+test("ordered runtime install uses bundled transport after the default manifest is persisted", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-ordered-bundled-"));
+  const runtimeDir = path.join(dataDir, "runtime", "v1");
+  const semanticModelPath = path.join(runtimeDir, "semantic-model", "1.0.0");
+  await fs.mkdir(semanticModelPath, { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, "manifest.json"), JSON.stringify(DEFAULT_RUNTIME_MANIFEST));
+  await fs.writeFile(path.join(runtimeDir, "component-state.json"), JSON.stringify({ format: "weki-runtime-state", version: 1, components: {
+    "semantic-model": { id: "semantic-model", status: "ready", version: "1.0.0", path: semanticModelPath, sourceType: "bundled", source: "Weki bundled runtime pack" },
+  } }));
+  const server = await startServer(dataDir);
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["semantic-model", "semantic-reranker"] }),
+  });
+  const queued = await response.json();
+  assert.equal(response.status, 202, JSON.stringify(queued));
+  let runtime = queued.runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  const batch = runtime.installBatch;
+  assert.equal(batch.status, "ready", JSON.stringify(batch));
+  assert.equal(batch.results["semantic-model"].status, "already-ready");
+  assert.equal(batch.results["semantic-reranker"].status, "installed", JSON.stringify(batch));
+  assert.equal(batch.failed.length, 0);
+  assert.equal(batch.installed.includes("semantic-reranker"), true);
+  assert.equal(runtime.components["semantic-reranker"].sourceType, "bundled");
+  assert.deepEqual(
+    await fs.readFile(path.join(runtimeDir, "semantic-reranker", "1.0.0", "reranker.mjs")),
+    await fs.readFile(path.join(projectRoot, "src", "runtime", "packs", "semantic-reranker", "1.0.0", "reranker.mjs")),
+  );
+});
+
 test("runtime install batch continues after a real reranker failure", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-install-failure-"));
   const runtimeDir = path.join(dataDir, "runtime", "v1");
@@ -466,6 +505,45 @@ test("runtime install batch continues after a real reranker failure", async (t) 
   assert.equal(batch.failed[0].id, "semantic-reranker");
   assert.equal(batch.currentComponent, null);
   assert.ok(batch.finishedAt);
+});
+
+test("MYBOX manifest parse failures remain failed with their concrete error", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-mybox-manifest-failure-"));
+  let apiBase = "";
+  const provider = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+    if (url.pathname === "/v1/drive/resources") return json({ resources: [{ resourceId: "wiki-id", name: "wiki", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/wiki-id/resources") return json({ resources: [{ resourceId: "runtime-id", name: "runtime", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/runtime-id/resources") return json({ resources: [{ resourceId: "v1-id", name: "v1", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/v1-id/resources") return json({ resources: [{ resourceId: "manifest-id", name: "manifest.json", type: "file" }] });
+    if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/v1/malformed-manifest` });
+    if (url.pathname === "/v1/malformed-manifest") { res.setHeader("Content-Type", "application/json"); return res.end("{malformed"); }
+    res.statusCode = 404;
+    return res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  apiBase = `http://127.0.0.1:${provider.address().port}`;
+  const server = await startServer(dataDir, { env: { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: `${apiBase}/v1` } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install-all`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentIds: ["document-renderer"] }),
+  });
+  assert.equal(response.status, 202);
+  let runtime = (await response.json()).runtime;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    runtime = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
+    if (runtime.installBatch.status !== "indexing") break;
+    await delay(50);
+  }
+  assert.equal(runtime.installBatch.status, "failed", JSON.stringify(runtime.installBatch));
+  assert.equal(runtime.installBatch.results["document-renderer"].status, "failed");
+  assert.match(runtime.installBatch.results["document-renderer"].error, /MYBOX runtime manifest를 읽을 수 없습니다/);
+  assert.equal(runtime.installBatch.failed[0].id, "document-renderer");
+  assert.equal(runtime.installBatch.unavailable.length, 0);
 });
 
 test("clean installs keep the document renderer uninstalled until a runtime pack is present", async (t) => {

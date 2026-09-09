@@ -31,7 +31,7 @@ import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
 import { collectZipVisualAssets } from "./src/processing/visual-assets.mjs";
 import { buildVisualContext } from "./src/processing/visual-context.mjs";
 import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
-import { getComponentState, installComponent, retryComponent } from "./src/runtime/components.mjs";
+import { getComponentState, installComponent, retryComponent, validateManifest } from "./src/runtime/components.mjs";
 import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
 import { createRuntimeRerankerProvider } from "./src/runtime/reranker.mjs";
 import { normalizeProcessingSettings, PROCESSING_DEFAULT_MODES, resolveProcessingDefault } from "./src/server/processing-settings.mjs";
@@ -927,12 +927,21 @@ app.post("/api/v2/search/reindex", async (_req, res) => {
 // Backward-compatible restart contract: semantic-model and document-renderer remain restart-required.
 // restartRequired: ["semantic-model", "document-renderer"].includes(component.id)
 app.get("/api/runtime/components", async (_req, res) => { res.json(await runtimeStatus()); });
+class RuntimePackUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RuntimePackUnavailableError";
+    this.code = "runtime_pack_not_configured";
+  }
+}
 async function readMyboxRuntimeManifest() {
   const structure = await findMyboxRuntimeStructure();
-  if (!structure?.manifest) throw new Error("MYBOX wiki/runtime/v1/manifest.json이 없습니다.");
+  if (!structure?.manifest) throw new RuntimePackUnavailableError("MYBOX wiki/runtime/v1/manifest.json이 없습니다.");
   let manifest;
   try { manifest = JSON.parse(Buffer.from(await (await mybox.downloadFile(structure.manifest.resourceId)).arrayBuffer()).toString("utf8")); }
   catch (error) { throw new Error(`MYBOX runtime manifest를 읽을 수 없습니다: ${error.message}`); }
+  const validation = validateManifest(manifest);
+  if (!validation.ok) throw new Error(`MYBOX runtime manifest가 유효하지 않습니다: ${validation.reason}`);
   return { structure, manifest };
 }
 async function fetchRuntimeSource(url) {
@@ -958,14 +967,23 @@ async function runtimeInstallOptions(componentId, version) {
   let localManifest = null;
   try { localManifest = JSON.parse(await fs.readFile(path.join(runtimeRoot, "manifest.json"), "utf8")); } catch { /* Use the default or MYBOX manifest below. */ }
   const localEntry = localManifest?.components?.find((entry) => entry.id === componentId && (!version || entry.version === version));
+  const bundledLocalEntry = componentId === "semantic-reranker" && localEntry?.files?.some((file) => typeof file.url === "string" && file.url.startsWith("file:"));
+  if (bundledLocalEntry) return { manifest: localManifest, version: localEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
   if (localEntry && !documentRenderer && localManifest.source !== "mybox") return { manifest: localManifest, version: localEntry.version, sourceType: "public", source: localManifest.source || null, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL || null, fetchImpl: globalThis.fetch };
   const defaultEntry = DEFAULT_RUNTIME_MANIFEST.components.find((entry) => entry.id === componentId && (!version || entry.version === version));
   if (defaultEntry && !documentRenderer) return { manifest: DEFAULT_RUNTIME_MANIFEST, version: defaultEntry.version, sourceType: "bundled", source: "Weki bundled runtime pack", baseUrl: null, fetchImpl: fetchRuntimeSource };
+  let myboxUnavailable = null;
+  if (!process.env.NAVER_MBOX_TOKEN) myboxUnavailable = new RuntimePackUnavailableError("MYBOX runtime pack이 설정되지 않았습니다.");
   try {
-    const loaded = await readMyboxRuntimeManifest();
-    const entry = loaded.manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
-    if (entry) return { manifest: loaded.manifest, version: entry.version, sourceType: "mybox", source: loaded.manifest.source || "mybox", baseUrl: `mybox://runtime/${encodeURIComponent(componentId)}/${encodeURIComponent(entry.version)}/`, fetchImpl: myboxRuntimeSource({ structure: loaded.structure, componentId, version: entry.version }) };
-  } catch { /* An unconfigured MYBOX source is a pending component, not a batch failure. */ }
+    if (!myboxUnavailable) {
+      const loaded = await readMyboxRuntimeManifest();
+      const entry = loaded.manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
+      if (entry) return { manifest: loaded.manifest, version: entry.version, sourceType: "mybox", source: loaded.manifest.source || "mybox", baseUrl: `mybox://runtime/${encodeURIComponent(componentId)}/${encodeURIComponent(entry.version)}/`, fetchImpl: myboxRuntimeSource({ structure: loaded.structure, componentId, version: entry.version }) };
+    }
+  } catch (error) {
+    if (!(error instanceof RuntimePackUnavailableError)) throw error;
+    myboxUnavailable = error;
+  }
   if (process.env.WEKI_RUNTIME_MANIFEST_URL && !documentRenderer) {
     const response = await fetch(process.env.WEKI_RUNTIME_MANIFEST_URL);
     if (!response.ok) throw new Error("runtime manifest download failed");
@@ -973,6 +991,7 @@ async function runtimeInstallOptions(componentId, version) {
     const entry = manifest.components?.find((item) => item.id === componentId && (!version || item.version === version));
     if (entry) return { manifest, version: entry.version, sourceType: "public", source: process.env.WEKI_RUNTIME_MANIFEST_URL, baseUrl: process.env.WEKI_RUNTIME_MANIFEST_URL, fetchImpl: globalThis.fetch };
   }
+  if (myboxUnavailable) throw myboxUnavailable;
   if (documentRenderer) throw new Error("document-renderer는 MYBOX 배포본만 설치할 수 있습니다.");
   throw new Error(`runtime component is not currently distributable: ${componentId}`);
 }
@@ -996,7 +1015,13 @@ function startRuntimeInstallBatch(componentIds) {
       let options;
       try {
         options = await runtimeInstallOptions(componentId, current?.availableVersion || null);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof RuntimePackUnavailableError)) {
+          runtimeInstallBatchState.results[componentId] = { status: "failed", error: error.message };
+          runtimeInstallBatchState.failed.push({ id: componentId, error: error.message });
+          runtimeInstallBatchState.completed += 1;
+          continue;
+        }
         runtimeInstallBatchState.results[componentId] = { status: "unavailable", reason: "runtime_pack_not_configured" };
         runtimeInstallBatchState.unavailable.push(componentId);
         runtimeInstallBatchState.completed += 1;
