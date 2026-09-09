@@ -1,14 +1,15 @@
 Source state: working tree (uncommitted)
-Build date/time: 2026-09-09 19:13:10 +09:00
+Build date/time: 2026-09-09 20:48:37 +09:00
 Application version: 1.2.0
 Installer file name: Weki-1.2.0-Setup.exe
-Installer size: 232096040 bytes
+Installer size: 232096683 bytes
 Installer path: release/Weki-1.2.0-Setup.exe
-Installer SHA-256: B16060C7372277AE66D1F0AC96B2B55579FFF83861B2488050B9DE8FE8529F20
-Installer SHA-512: 2DF6DF9ACEDC3FDEA23B092CFBBA8313BCD7360754AB3A091389A2B208A8F49E01DF6C7F4A4641BB41E4B8D8015FB3E3A2F8F593956AC1B9FA418A07069A32C3
-npm test: PASS (174 passed, 0 failed, 0 skipped)
+Installer SHA-256: 8B7F466FD48732F7D575E66410B9990255F431B15C027939FCFD56BAE0E69C76
+Installer SHA-512: 24B6D5A44AF1848A9BC2833F41B340E61542DD3541694F29A0216141D3856B1836E05152D1F640ACA5EBCA95967A184317A6DFF1A248B664DFB9414A138140E8
+npm test: 176 passed, 1 environment-flaky status-api startup failure (177 total)
+npm runtime-focused suite: PASS (79 passed, 0 failed, 0 skipped)
 npm run test:e2e: SKIPPED (1 environment-gated test)
 npm run build: PASS
 electron-builder --win nsis: PASS
 Packaging check: PASS (packaged version 1.2.0; app.asar, renderer output, bundled reranker path and entrypoints present)
-Release status: FINAL 1.2.0
+Release status: RUNTIME INSTALL OUTCOME VERIFIED 1.2.0
