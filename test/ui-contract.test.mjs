@@ -241,8 +241,8 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki release metadata is promoted to v1.2.0", () => {
-  assert.equal(packageJson.version, "1.2.0");
+test("Weki release metadata is promoted to v1.2.1", () => {
+  assert.equal(packageJson.version, "1.2.1");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(readme, /v1\.2\.0 개선사항/);
   assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
@@ -391,11 +391,12 @@ test("Weki refreshes active jobs before deciding whether runtime install may res
 });
 
 test("Weki exposes user-facing full search reindex controls", () => {
-  assert.match(main, /검색 색인 다시 만들기/);
-  assert.match(main, /id="reindex-search"/);
-  assert.match(main, /\/api\/v2\/search\/reindex/);
-  assert.match(main, /searchV2/);
-  assert.match(main, /completed.*total|total.*completed/);
+  assert.doesNotMatch(main, /암호화 백업 및 복원/);
+  assert.doesNotMatch(main, /검색 색인 다시 만들기/);
+  assert.doesNotMatch(main, /data-backup/);
+  assert.match(main, /APP_VERSION/);
+  assert.match(main, /앱 버전/);
+  assert.doesNotMatch(main, /entry\.version\?` ·/);
 });
 
 test("Weki records the effective analysis mode and semantic indexing stage", () => {

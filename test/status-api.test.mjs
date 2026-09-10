@@ -72,6 +72,23 @@ test("GET /api/status reports storage and maintenance state", async (t) => {
   assert.equal(status.storage.total - status.storage.available, status.storage.usage);
 });
 
+test("retired POST /api/backups route is absent", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-backups-route-test-"));
+  const server = startServer(dataDir);
+  t.after(() => {
+    server.child.kill();
+    return fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  await waitForStatusReady(server.output, server.port);
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/backups`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "full", passphrase: "not-used" }),
+  });
+  assert.equal(response.status, 404);
+});
+
 test("MYBOX status explains a missing credential without affecting local startup", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-mybox-missing-token-test-"));
   const server = startServer(dataDir, { NAVER_MBOX_TOKEN: "", WEKI_MYBOX_CREDENTIAL_STATE: "missing" });

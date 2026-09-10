@@ -5,33 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import { createBackupSnapshot, createFolderSnapshot, mergeDatabases, reconcileFolderSnapshotOriginals, removeDocumentData, validateBackupSnapshot, validateFolderSnapshot } from "../src/server/backup.mjs";
+import { createFolderSnapshot, mergeDatabases, reconcileFolderSnapshotOriginals, removeDocumentData, validateFolderSnapshot } from "../src/server/backup.mjs";
 
 const tempStore = async () => fs.mkdtemp(path.join(os.tmpdir(), "weki-backup-test-"));
 const hashOf = (value) => crypto.createHash("sha256").update(value).digest("hex");
-
-test("backup snapshot includes and verifies every available original", async (t) => {
-  const dir = await tempStore();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const original = Buffer.from("social-security-source");
-  const hash = hashOf(original);
-  await fs.writeFile(path.join(dir, `${hash}.pdf`), original);
-
-  const snapshot = await createBackupSnapshot({
-    documents: [{ id: "doc-1", name: "source.pdf", format: "PDF", hash, sourceStatus: "available", originalPath: path.join(dir, `${hash}.pdf`), units: [] }],
-    synonyms: [],
-    feedback: [],
-    audit: [],
-    jobs: [{ id: "job-1", status: "processing" }],
-  }, dir, { now: () => "2026-09-06T00:00:00.000Z" });
-
-  assert.equal(snapshot.format, "weki-cloud-backup");
-  assert.equal(snapshot.manifest.originalCount, 1);
-  assert.equal(snapshot.database.jobs.length, 0);
-  assert.deepEqual(Object.keys(snapshot.originals), [hash]);
-  assert.equal(snapshot.originals[hash].data, original.toString("base64"));
-  assert.deepEqual(validateBackupSnapshot(snapshot), snapshot);
-});
 
 test("document merge deduplicates identical hashes and keeps different versions", () => {
   const local = {
@@ -57,16 +34,6 @@ test("document merge deduplicates identical hashes and keeps different versions"
   assert.equal(result.database.audit.length, 2);
   assert.deepEqual(result.database.jobs, [{ id: "local-job" }]);
   assert.equal(result.conflicts, 1);
-});
-
-test("backup snapshot rejects an original whose bytes do not match its document hash", async (t) => {
-  const dir = await tempStore();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const hash = hashOf("expected");
-  const originalPath = path.join(dir, `${hash}.pdf`);
-  await fs.writeFile(originalPath, "tampered");
-
-  await assert.rejects(() => createBackupSnapshot({ documents: [{ id: "doc", format: "PDF", hash, sourceStatus: "available", originalPath, units: [] }] }, dir), /원본 Hash/);
 });
 
 test("folder backup keeps the actual original outside the JSON payload", async (t) => {
