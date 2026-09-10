@@ -927,6 +927,8 @@ app.get("/api/v2/status", async (_req, res) => {
   }
   res.json({ enabled: v2Enabled, engines, reindex: v2ReindexState, rankingVersion: RANKING_VERSION, dataDirectory: v2DataDir });
 });
+// Internal migration/recovery only: rebuilds FTS/embedding/ANN projections from existing parsed units,
+// not v1.3.0 whole-document reprocessing (original -> parse/OCR/AI/embedding/index).
 app.post("/api/v2/search/reindex", async (_req, res) => {
   if (v2ReindexPromise) return res.status(202).json({ ...v2ReindexState, status: "indexing" });
   void startV2Reindex();

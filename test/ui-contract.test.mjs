@@ -405,9 +405,22 @@ test("Weki refreshes active jobs before deciding whether runtime install may res
   assert.ok(polling.indexOf('fetch("/api/jobs")') < polling.indexOf("scheduleRuntimeRestart"));
 });
 
-test("Weki removes retired controls and exposes the v1.2.1 version surface", () => {
+test("Weki keeps search-index recovery out of the renderer settings UI", () => {
   assert.doesNotMatch(main, /암호화 백업 및 복원/);
   assert.doesNotMatch(main, /검색 색인 다시 만들기/);
+  assert.doesNotMatch(main, /검색 색인 관리/);
+  assert.doesNotMatch(main, /id="reindex-search"/);
+  assert.doesNotMatch(main, /searchV2/);
+  assert.doesNotMatch(main, /searchReindexPollTimer/);
+  assert.doesNotMatch(main, /syncSearchReindexControls/);
+  assert.doesNotMatch(main, /startSearchReindexPolling/);
+  const refresh = main.match(/async function refresh\(\).*?async function runSearch/s)?.[0] || "";
+  assert.match(refresh, /fetch\("\/api\/status"\)/);
+  assert.doesNotMatch(refresh, /fetch\("\/api\/v2\/status"\)/);
+});
+
+test("Weki exposes the v1.2.1 version surface", () => {
+  assert.doesNotMatch(main, /암호화 백업 및 복원/);
   assert.doesNotMatch(main, /data-backup/);
   assert.match(main, /APP_VERSION/);
   assert.match(main, /앱 버전/);
