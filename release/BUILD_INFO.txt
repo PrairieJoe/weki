@@ -1,15 +1,16 @@
-Source state: clean HEAD at af2b466
-Build date/time: 2026-09-10 08:58:32 +09:00
-Application version: 1.2.0
-Installer file name: Weki-1.2.0-Setup.exe
-Installer size: 232098134 bytes
-Installer path: release/Weki-1.2.0-Setup.exe
-Installer SHA-256: FAD99238A2EFA11E264DF62146ED53FC3CD25C496EA2283A65A043FCBBC95A4F
-Installer SHA-512: AD78F4DF11F0778A6B442C302FC5DF2FED1C14E80D242EDA95B7135095AEDF765BBC8886C1591432173A4E0338F574509F59EB483223B15CE748573F52FFC929
-npm test: 184 passed, 0 failed, 0 skipped
-npm runtime-focused suite: PASS (107 passed, 0 failed, 0 skipped)
-npm run test:e2e: SKIPPED (1 environment-gated test)
+Source state: clean HEAD at 08e068a
+Build date/time: 2026-09-10 11:08:08 +09:00
+Application version: 1.2.1
+Installer file name: Weki-1.2.1-Setup.exe
+Installer size: 232093782 bytes
+Installer path: release/Weki-1.2.1-Setup.exe
+Installer SHA-256: BA5507A448C9ED694A8FFCC0A04719AFA4DD9E76726F929509141E01A41E6F98
+Installer SHA-512: BB6F315F7A2E328FCF723688400B481009A85F22EA3F0A009CF13256D44279C70B8430607BC447F2172D5B3B2B32DBA2F128600E53391F7D0E056BE856864034
+npm test: 178 passed, 7 failed, 0 skipped
+Known missing test_data fixture failures: 6 (PDF/HWPX fixture files absent; no fixtures added)
+Non-fixture test failure: 1 (runtime component UI contract expects the missing "고급 관리" text)
+npm run test:e2e: 0 passed, 1 failed, 0 skipped (missing PDF test_data fixture; Electron not launched)
 npm run build: PASS
-electron-builder --win nsis: PASS
-Packaging check: PASS (packaged version 1.2.0; app.asar, renderer output, bundled reranker path and entrypoints present)
-Release status: RUNTIME INSTALL OUTCOME VERIFIED 1.2.0
+npm run dist:win: PASS
+Packaging check: PASS (packaged version 1.2.1; app.asar, renderer output, bundled reranker path and entrypoints present)
+Release status: v1.2.1 ARTIFACT VERIFIED; TEST SUITE LIMITED BY 6 MISSING-FIXTURE FAILURES AND 1 NON-FIXTURE UI CONTRACT FAILURE

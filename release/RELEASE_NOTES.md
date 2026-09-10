@@ -6,6 +6,23 @@
 - 전체 문서 재처리(파싱·OCR·AI·Embedding·색인 재실행)는 v1.3.0 검토 항목입니다.
 - 일반 화면에는 앱 릴리즈 버전만 표시하고 runtime/ranking 내부 버전은 진단 용도로 유지합니다.
 
+## 검증
+
+- `npm test`: 178 passed / 7 failed / 0 skipped
+- 알려진 `test_data` fixture 누락: PDF/HWPX 관련 6건 실패. fixture는 추가하거나 복사하지 않았습니다.
+- 별도 비-fixture 실패: runtime 구성요소 UI contract가 `고급 관리` 문구를 요구하지만 현재 `src/main.js`에는 없습니다.
+- `npm run test:e2e`: 0 passed / 1 failed / 0 skipped. PDF fixture가 없어 Electron 실행 전에 실패했습니다.
+- `npm run build`: 통과
+- `npm run dist:win`: 통과
+- 패키지 버전 `1.2.1`, SHA-256 및 SHA-512 검증 완료
+
+## 설치파일
+
+- 파일: `Weki-1.2.1-Setup.exe`
+- 크기: 232,093,782 bytes
+- SHA-256: `BA5507A448C9ED694A8FFCC0A04719AFA4DD9E76726F929509141E01A41E6F98`
+- SHA-512: `BB6F315F7A2E328FCF723688400B481009A85F22EA3F0A009CF13256D44279C70B8430607BC447F2172D5B3B2B32DBA2F128600E53391F7D0E056BE856864034`
+
 ---
 
 # Weki v1.2.0
