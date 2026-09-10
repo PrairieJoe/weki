@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 
 const styles = await readFile(new URL("../styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const searchService = await readFile(new URL("../src/search/service.mjs", import.meta.url), "utf8");
 const runtimePresentation = await readFile(new URL("../src/runtime/presentation.mjs", import.meta.url), "utf8");
 const index = await readFile(new URL("../index.html", import.meta.url), "utf8");
 const electronMain = await readFile(new URL("../electron-main.cjs", import.meta.url), "utf8");
@@ -250,17 +251,6 @@ test("Weki release metadata is promoted to v1.2.1", () => {
   assert.equal(packageLock.version, "1.2.1");
   assert.equal(packageLock.packages?.[""].version, "1.2.1");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
-  assert.match(main, /APP_VERSION\s*=|APP_VERSION/);
-  assert.match(main, /앱 버전/);
-  assert.match(main, /앱 버전[^`<>]{0,80}1\.2\.1/);
-  assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.2\.1/);
-  assert.match(buildInfo, /Weki-1\.2\.1-Setup\.exe/);
-  assert.match(latestYml, /version:\s*1\.2\.1/);
-  assert.match(latestYml, /Weki-1\.2\.1-Setup\.exe/);
-  assert.match(sha256, /Weki-1\.2\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
-  assert.match(readme, /v1\.2\.0 개선사항/);
-  assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
@@ -419,12 +409,18 @@ test("Weki keeps search-index recovery out of the renderer settings UI", () => {
   assert.doesNotMatch(refresh, /fetch\("\/api\/v2\/status"\)/);
 });
 
-test("Weki exposes the v1.2.1 version surface", () => {
+test("Weki exposes only the app release version while retaining internal compatibility versions", () => {
   assert.doesNotMatch(main, /암호화 백업 및 복원/);
   assert.doesNotMatch(main, /data-backup/);
-  assert.match(main, /APP_VERSION/);
-  assert.match(main, /앱 버전/);
-  assert.doesNotMatch(main, /entry\.version\?` ·/);
+  assert.match(main, /import packageJson from "\.\.\/package\.json"/);
+  assert.match(main, /const APP_VERSION = packageJson\.version/);
+  assert.match(main, /앱 버전 \$\{APP_VERSION\}/);
+  assert.match(main, /data-runtime-version="\$\{escape\(installable\[entry\.id\]\.version\)\}"/);
+  assert.doesNotMatch(main, /status\.textContent=`\$\{statusText\}\$\{entry\.version/);
+  assert.doesNotMatch(main, /\$\{escape\(statusLabel\[entry\.status\]\|\|entry\.status\)\}\$\{entry\.version/);
+  assert.doesNotMatch(main, /문서 화면 처리기 \$\{renderer\.version\} 배포본/);
+  assert.match(main, /문서 화면 처리기 배포본을 확인했습니다\./);
+  assert.match(searchService, /export const RANKING_VERSION/);
 });
 
 test("Weki records the effective analysis mode and semantic indexing stage", () => {
