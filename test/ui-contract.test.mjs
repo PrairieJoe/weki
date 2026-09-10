@@ -251,6 +251,14 @@ test("Weki release metadata is promoted to v1.2.1", () => {
   assert.equal(packageLock.version, "1.2.1");
   assert.equal(packageLock.packages?.[""].version, "1.2.1");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
+  assert.match(releaseNotesV121, /1\.2\.1/);
+  assert.match(buildInfo, /Application version:\s*1\.2\.1/);
+  assert.match(buildInfo, /Weki-1\.2\.1-Setup\.exe/);
+  assert.match(latestYml, /version:\s*1\.2\.1/);
+  assert.match(latestYml, /Weki-1\.2\.1-Setup\.exe/);
+  assert.match(sha256, /Weki-1\.2\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
+  assert.match(readme, /v1\.2\.0 개선사항/);
+  assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
