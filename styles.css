@@ -40,3 +40,15 @@
 @media(max-width:580px){.onboarding-dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px);margin:10px;padding:22px 20px 18px;border-radius:12px}.onboarding-close{margin:-12px -10px 0 0}.onboarding-title{font-size:22px}.onboarding-description{font-size:15px}.onboarding-actions{align-items:stretch;flex-direction:column;gap:10px;margin-top:20px;padding-top:14px}.onboarding-navigation{width:100%;margin-left:0}.onboarding-navigation button{flex:1}.onboarding-skip{align-self:flex-start;min-height:40px}}
 @media(max-width:1279px){.sidebar .help{display:grid;place-items:center;min-height:44px;padding-inline:8px;font-size:0}.sidebar .help::before{content:"?";font-size:18px;font-weight:700}}
 @media(prefers-reduced-motion:reduce){.onboarding-scrim,.onboarding-spotlight,.onboarding-dialog{animation:none;transition:none}}
+/* v1.2.2 UI alignment overrides: keep runtime status and actions in stable columns. */
+.onboarding-root{--onboarding-scrim:rgba(24,28,32,0.42)}
+.onboarding-scrim{background:var(--onboarding-scrim)}
+.onboarding-spotlight{box-shadow:0 0 0 9999px var(--onboarding-scrim),0 0 0 5px rgba(174,184,255,.2),0 8px 24px rgba(0,0,0,.24)}
+.runtime-card-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+#runtime-components-card .runtime-card-header h2{margin-bottom:0}
+#runtime-components-card .engine{display:grid;grid-template-columns:8px minmax(0,1fr) 220px 104px;align-items:center;gap:8px}
+#runtime-components-card .engine>b{grid-column:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#runtime-components-card .engine>span{grid-column:1}
+#runtime-components-card .engine em{grid-column:3;justify-self:start;min-width:0;margin-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#runtime-components-card .runtime-row-action{grid-column:4;justify-self:end;margin-left:0;min-width:88px}
+@media(max-width:580px){#runtime-components-card .engine{grid-template-columns:8px minmax(0,1fr) 148px 88px;gap:6px;font-size:14px}#runtime-components-card .engine em{font-size:12px}#runtime-components-card .runtime-row-action{min-width:76px;padding-inline:8px;font-size:12px}}

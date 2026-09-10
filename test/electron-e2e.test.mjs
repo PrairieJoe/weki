@@ -39,6 +39,18 @@ async function waitFor(label, callback, { timeout = 180_000, interval = 500 } = 
   throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ""}`);
 }
 
+async function stopProcess(child) {
+  if (!child || child.exitCode !== null) return;
+  child.kill();
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 5_000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 test("Electron flow indexes a visual document and shows concise highlighted evidence", async (t) => {
   const source = path.resolve(fixture);
   await fs.access(source);
@@ -71,19 +83,19 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
   }, { timeout: 30_000, interval: 200 });
   t.after(async () => {
     await browser.close().catch(() => {});
-    if (!electronProcess.killed) electronProcess.kill();
-    if (!serverProcess.killed) serverProcess.kill();
+    await stopProcess(electronProcess);
+    await stopProcess(serverProcess);
     await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   let page;
   try { page = await waitFor("Electron window", async () => browser.contexts()[0]?.pages()[0] || null, { timeout: 30_000, interval: 200 }); }
   catch (error) { throw new Error(`${error.message}\n${processOutput}`); }
-  try { await page.waitForSelector("#query", { timeout: 30_000 }); }
+  try { await page.waitForSelector("#app .app-shell", { timeout: 30_000 }); }
   catch (error) {
     if (!page.url()) {
       await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "domcontentloaded" }).catch((navigationError) => { throw new Error(`${navigationError.message}\n${processOutput}`); });
-      await page.waitForSelector("#query", { timeout: 30_000 });
+      await page.waitForSelector("#app .app-shell", { timeout: 30_000 });
     } else throw new Error(`${error.message}\nURL: ${page.url()}\nBODY: ${await page.locator("body").innerText().catch(() => "")}\n${processOutput}`);
   }
   await page.waitForSelector("#onboarding-root", { timeout: 15_000 });

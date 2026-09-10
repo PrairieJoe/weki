@@ -1,8 +1,8 @@
 export const ONBOARDING_STORAGE_KEY = "weki.onboarding.v1.completed";
 
 export const ONBOARDING_STEPS = Object.freeze([
-  Object.freeze({ page: "search", target: "search-composer", title: "문서에서 근거를 찾아보세요", description: "자연어로 질문하면 등록한 문서에서 실제 근거와 위치를 찾아드립니다." }),
   Object.freeze({ page: "add", target: "registration-dropzone", title: "문서를 등록하세요", description: "PDF, HWPX, DOCX 등의 문서를 등록하면 페이지별 검색 데이터가 만들어집니다." }),
+  Object.freeze({ page: "search", target: "search-composer", title: "문서에서 근거를 찾아보세요", description: "자연어로 질문하면 등록한 문서에서 실제 근거와 위치를 찾아드립니다." }),
   Object.freeze({ page: "search", target: "evidence-fallback", title: "결과와 근거를 확인하세요", description: "검색 결과는 문서명과 페이지 위치를 함께 보여주므로 원문을 바로 확인할 수 있습니다." }),
   Object.freeze({ page: "settings", target: "processing-mode", title: "처리 모드를 선택하세요", description: "설정에서 문서 처리 기본값과 로컬 AI 사용 여부를 확인할 수 있습니다." }),
   Object.freeze({ page: "settings", target: "mybox", title: "MYBOX를 연결할 수 있어요", description: "MYBOX에서는 검색 DB를 동기화하고 필요한 원본만 가져올 수 있습니다." }),

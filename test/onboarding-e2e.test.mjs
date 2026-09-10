@@ -138,10 +138,10 @@ async function launchEmptyApp() {
       }
     };
     page.on("request", recordMutation);
-    await page.waitForSelector("#query", { timeout: 30_000 }).catch(async (error) => {
+    await page.waitForSelector("#app .app-shell", { timeout: 30_000 }).catch(async (error) => {
       if (!page.url()) {
         await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "domcontentloaded" });
-        await page.waitForSelector("#query", { timeout: 30_000 });
+        await page.waitForSelector("#app .app-shell", { timeout: 30_000 });
       } else {
         throw new Error(`${error.message}\nURL: ${page.url()}\nBODY: ${await page.locator("body").innerText().catch(() => "")}\n${processOutput}`);
       }
@@ -180,11 +180,15 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   const { page, mutationRequests, recordMutation } = app;
 
   await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
-  await assertStep(page, 1, "search", "search-composer");
+  await assertStep(page, 1, "add", "registration-dropzone");
   assert.equal(await page.locator("[role=dialog][aria-modal=true]").count(), 1);
+  assert.equal(
+    await page.locator("[data-onboarding-scrim]").evaluate((element) => getComputedStyle(element).backgroundColor),
+    "rgba(24, 28, 32, 0.42)",
+  );
 
   await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 2, "add", "registration-dropzone");
+  await assertStep(page, 2, "search", "search-composer");
   await page.locator("[data-onboarding-next]").click();
   await assertStep(page, 3, "search", "evidence-fallback");
   await page.locator("[role=dialog]").evaluate(async (dialog) => {
@@ -228,7 +232,7 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   await guide.focus();
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-onboarding-replay")), true);
   await guide.click();
-  await assertStep(page, 1, "search", "search-composer");
+  await assertStep(page, 1, "add", "registration-dropzone");
   await page.keyboard.press("Escape");
   await waitFor("tour Escape close", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("search page after Escape", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
@@ -237,4 +241,38 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-onboarding-replay")), true);
   page.off("request", recordMutation);
   assert.equal(await page.evaluate(() => localStorage.getItem("weki.onboarding.v1.completed")), "completed");
+  await page.locator('button.nav-item[data-nav="settings"]').click();
+  await page.waitForSelector("#runtime-components-card .engine", { timeout: 15_000 });
+  await page.waitForFunction(() => [...document.querySelectorAll("#runtime-components-card .engine")].every((row) => row.querySelector("em")?.getBoundingClientRect().width > 0));
+
+  for (const viewport of [{ width: 1024, height: 700 }, { width: 1360, height: 900 }]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.locator("#runtime-components-card").evaluate((card) => {
+      const header = card.querySelector(".runtime-card-header");
+      const title = header?.querySelector("h2")?.getBoundingClientRect();
+      const installAll = header?.querySelector("[data-runtime-install-all]")?.getBoundingClientRect();
+      const rows = [...card.querySelectorAll(".engine")].map((row) => ({
+        id: row.dataset.runtimeComponent,
+        statusLeft: row.querySelector("em")?.getBoundingClientRect().left ?? null,
+        actionLeft: row.querySelector(".runtime-row-action")?.getBoundingClientRect().left ?? null,
+      }));
+      return {
+        titleCenterY: title ? title.top + title.height / 2 : null,
+        installAllCenterY: installAll ? installAll.top + installAll.height / 2 : null,
+        rows,
+      };
+    });
+
+    assert.ok(layout.titleCenterY !== null && layout.installAllCenterY !== null);
+    assert.ok(Math.abs(layout.titleCenterY - layout.installAllCenterY) <= 2, `${viewport.width}px runtime header controls are not vertically aligned`);
+    const statusLefts = layout.rows.map((row) => row.statusLeft).filter((left) => left !== null);
+    assert.ok(statusLefts.length >= 3);
+    assert.ok(Math.max(...statusLefts) - Math.min(...statusLefts) <= 1, `${viewport.width}px status columns drift: ${statusLefts.join(", ")}`);
+    const actionLefts = layout.rows.map((row) => row.actionLeft).filter((left) => left !== null);
+    assert.ok(actionLefts.length >= 2);
+    assert.ok(Math.max(...actionLefts) - Math.min(...actionLefts) <= 1, `${viewport.width}px action columns drift: ${actionLefts.join(", ")}`);
+    const renderer = layout.rows.find((row) => row.id === "document-renderer");
+    assert.ok(renderer);
+    assert.equal(renderer.actionLeft, null);
+  }
 });

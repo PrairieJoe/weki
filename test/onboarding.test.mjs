@@ -40,8 +40,8 @@ test("온보딩은 고정된 키와 5단계 화면·대상 순서를 공개한�
   assert.deepEqual(
     ONBOARDING_STEPS.map(({ page, target }) => ({ page, target })),
     [
-      { page: "search", target: "search-composer" },
       { page: "add", target: "registration-dropzone" },
+      { page: "search", target: "search-composer" },
       { page: "search", target: "evidence-fallback" },
       { page: "settings", target: "processing-mode" },
       { page: "settings", target: "mybox" },
@@ -84,15 +84,15 @@ test("온보딩 컨트롤러는 재생 시 1단계에서 시작하고 이전·�
   await controller.start();
   assert.equal(controller.getState().active, true);
   assert.equal(controller.getState().index, 0);
-  assert.equal(controller.getState().step.target, "search-composer");
-  assert.equal(page, "search");
+  assert.equal(controller.getState().step.target, "registration-dropzone");
+  assert.equal(page, "add");
 
   await controller.previous();
   assert.equal(controller.getState().index, 0);
   await controller.next();
   assert.equal(controller.getState().index, 1);
-  assert.equal(controller.getState().step.target, "registration-dropzone");
-  assert.deepEqual(navigatedPages, ["search", "add"]);
+  assert.equal(controller.getState().step.target, "search-composer");
+  assert.deepEqual(navigatedPages, ["add", "search"]);
 });
 
 test("온보딩 완료와 건너뛰기는 완료 상태를 저장하고 시작 화면으로 복귀한다", async () => {
@@ -158,7 +158,7 @@ function deferred() {
 }
 
 test("온보딩은 진행 중 중복 next 호출을 무시해 단계를 건너뛰지 않는다", async () => {
-  let page = "search";
+  let page = "add";
   let navigationStarted;
   let navigationRelease;
   let navigationCount = 0;
@@ -193,7 +193,7 @@ test("온보딩은 진행 중 중복 next 호출을 무시해 단계를 건너�
 });
 
 test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건너뛰지 않는다", async () => {
-  let page = "search";
+  let page = "add";
   let deferAddNavigation = false;
   let navigationStarted;
   let navigationRelease;
@@ -214,8 +214,7 @@ test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건�
 
   await controller.start();
   await controller.next();
-  await controller.next();
-  assert.equal(controller.getState().index, 2);
+  assert.equal(controller.getState().index, 1);
 
   deferAddNavigation = true;
   navigationStarted = deferred();
@@ -224,10 +223,10 @@ test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건�
   await navigationStarted.promise;
   const secondPrevious = controller.previous();
 
-  assert.equal(controller.getState().index, 1);
+  assert.equal(controller.getState().index, 0);
   navigationRelease.resolve();
   await Promise.all([firstPrevious, secondPrevious]);
-  assert.equal(controller.getState().index, 1);
+  assert.equal(controller.getState().index, 0);
 });
 
 class FakeElement {
@@ -409,7 +408,7 @@ function createFakeWindow() {
 test("온보딩 대상이 viewport 밖에 남으면 스크롤 후 중앙 카드 fallback을 사용한다", async () => {
   const documentRef = new FakeDocument();
   const target = documentRef.createElement("div");
-  target.setAttribute("data-onboarding-target", "search-composer");
+  target.setAttribute("data-onboarding-target", "registration-dropzone");
   target.rect = { top: 1000, left: 20, width: 300, height: 40 };
   target.afterScrollRect = { top: 700, left: 20, width: 300, height: 40 };
   documentRef.body.append(target);

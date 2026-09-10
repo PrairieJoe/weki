@@ -19,6 +19,7 @@ const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.met
 const latestYml = await readFile(new URL("../release/latest.yml", import.meta.url), "utf8");
 const sha256 = await readFile(new URL("../release/SHA256.txt", import.meta.url), "utf8");
 const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
+const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
@@ -247,10 +248,10 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki release metadata is promoted to v1.2.1", () => {
-  assert.equal(packageJson.version, "1.2.1");
-  assert.equal(packageLock.version, "1.2.1");
-  assert.equal(packageLock.packages?.[""].version, "1.2.1");
+test("Weki source release metadata targets v1.2.2 while preserving the v1.2.1 artifact snapshot", () => {
+  assert.equal(packageJson.version, "1.2.2");
+  assert.equal(packageLock.version, "1.2.2");
+  assert.equal(packageLock.packages?.[""].version, "1.2.2");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
   assert.match(buildInfo, /Application version:\s*1\.2\.1/);
@@ -260,6 +261,9 @@ test("Weki release metadata is promoted to v1.2.1", () => {
   assert.match(sha256, /Weki-1\.2\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(readme, /v1\.2\.0 개선사항/);
   assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
+  assert.match(releaseNotesV122, /1\.2\.2/);
+  assert.match(releaseNotesV122, /온보딩/);
+  assert.match(releaseNotesV122, /고품질 검색 구성요소/);
 });
 
 test("Weki exposes a replayable five-step onboarding tour", () => {
@@ -274,6 +278,8 @@ test("Weki exposes a replayable five-step onboarding tour", () => {
   assert.match(onboarding, /건너뛰기/);
   assert.match(onboarding, /다음/);
   assert.match(main, /사용 가이드/);
+  assert.match(styles, /--onboarding-scrim:\s*rgba\(24,\s*28,\s*32,\s*0\.42\)/);
+  assert.match(styles, /\.onboarding-scrim\{background:var\(--onboarding-scrim\)/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
@@ -350,7 +356,16 @@ test("Weki keeps the full-install action separate from the runtime description",
   assert.match(main, /classList\.add\("runtime-description"\)/);
   assert.match(main, /card\.querySelector\("\.runtime-description"\)/);
   assert.match(main, /button\.textContent=.*전체 설치/);
+  assert.match(main, /runtime-card-header/);
+  assert.match(styles, /\.runtime-card-header\{[^}]*display:flex[^}]*justify-content:space-between/);
   assert.doesNotMatch(main, /const description=heading\?\.nextElementSibling/);
+});
+
+test("Weki reserves stable runtime status and action columns", () => {
+  assert.match(main, /runtime-card-header/);
+  assert.match(styles, /#runtime-components-card \.engine\{[^}]*display:grid/);
+  assert.match(styles, /#runtime-components-card \.engine em\{[^}]*grid-column:3/);
+  assert.match(styles, /#runtime-components-card \.runtime-row-action\{[^}]*grid-column:4[^}]*margin-left:0/);
 });
 
 test("Weki wires source-aware runtime outcomes into stable component rows", () => {

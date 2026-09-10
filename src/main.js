@@ -281,6 +281,20 @@ function syncRuntimeCardPresentation(card,data){
   button.textContent=allReady?"최신 상태":installing?"고품질 구성요소 설치 중…":restartRequired&&!available?"앱 재시작 필요":"전체 설치";
   if(installing)startRuntimePolling();
   enhanceRuntimeCard(card,data);
+  ensureRuntimeCardHeader(card);
+}
+function ensureRuntimeCardHeader(card){
+  const title=card?.querySelector("h2");
+  if(!title)return;
+  let header=card.querySelector(".runtime-card-header");
+  if(!header){
+    header=document.createElement("div");
+    header.className="runtime-card-header";
+    title.before(header);
+    header.append(title);
+  }
+  const button=card.querySelector("[data-runtime-install-all]");
+  if(button&&button.parentElement!==header)header.append(button);
 }
 function syncMockControls(){
   if(state.page==="add"){
