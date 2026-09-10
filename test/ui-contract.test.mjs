@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 
 const styles = await readFile(new URL("../styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const onboarding = await readFile(new URL("../src/onboarding.js", import.meta.url), "utf8").catch(() => "");
 const searchService = await readFile(new URL("../src/search/service.mjs", import.meta.url), "utf8");
 const runtimePresentation = await readFile(new URL("../src/runtime/presentation.mjs", import.meta.url), "utf8");
 const index = await readFile(new URL("../index.html", import.meta.url), "utf8");
@@ -261,6 +262,20 @@ test("Weki release metadata is promoted to v1.2.1", () => {
   assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
 });
 
+test("Weki exposes a replayable five-step onboarding tour", () => {
+  assert.match(main, /사용 가이드/);
+  assert.match(main, /data-onboarding-replay/);
+  for (const target of ["search-composer", "registration-dropzone", "evidence-fallback", "processing-mode", "mybox"]) {
+    assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
+  }
+  assert.match(onboarding, /role=["']dialog["']/);
+  assert.match(onboarding, /aria-modal=["']true["']/);
+  assert.match(onboarding, /data-onboarding-progress/);
+  assert.match(onboarding, /건너뛰기/);
+  assert.match(onboarding, /다음/);
+  assert.match(main, /사용 가이드/);
+});
+
 test("Weki installer pages share one custom value-entry layout", () => {
   assert.equal(packageJson.build?.nsis?.allowToChangeInstallationDirectory, false);
   assert.match(installer, /Page custom WekiInstallDirPageCreate WekiInstallDirPageLeave/);
@@ -324,8 +339,8 @@ test("Weki explains all runtime component states and supports a single install f
   assert.match(main, /배포 준비 중/);
   assert.match(main, /업데이트/);
   assert.match(main, /정상 작동/);
-  assert.match(main, /고급 관리/);
-  assert.match(main, /다른 PC에서 검색 데이터/);
+  assert.doesNotMatch(main, /고급 관리/);
+  assert.doesNotMatch(main, /다른 PC에서 검색 데이터/);
   assert.match(server, /install-all/);
   assert.match(server, /availableVersion/);
   assert.match(server, /updateAvailable/);

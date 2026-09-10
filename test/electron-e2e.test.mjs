@@ -138,10 +138,10 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
   assert.equal(await page.locator(".score b").first().textContent().then((value) => /^\d{1,3}$/.test(value.trim())), true);
   assert.equal((await page.locator('.visual-preview img[src*="/visual/"]').count() > 0), expectVisual);
 
-  let failNextV2StatusRefresh = false;
-  await page.route("**/api/v2/status", async (route) => {
-    if (failNextV2StatusRefresh) {
-      failNextV2StatusRefresh = false;
+  let failNextStatusRefresh = false;
+  await page.route("**/api/status", async (route) => {
+    if (failNextStatusRefresh) {
+      failNextStatusRefresh = false;
       await route.abort("failed");
       return;
     }
@@ -150,7 +150,7 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
   await page.locator('button.nav-item[data-nav="settings"]').click();
   await page.locator("#delete-confirmation").fill("DELETE ALL DOCUMENTS");
   await page.locator("#delete-all-data").click();
-  failNextV2StatusRefresh = true;
+  failNextStatusRefresh = true;
   await page.locator("[data-dialog-confirm]").click();
   await page.waitForSelector(".dialog-backdrop", { state: "detached" });
   await waitFor("whole document deletion", async () => page.evaluate(async () => (await (await fetch("/api/documents")).json()).documents.length === 0));

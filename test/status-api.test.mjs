@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -34,6 +35,71 @@ function startServer(dataDir, extraEnv = {}) {
   };
 }
 
+const SERVER_STOP_TIMEOUT_MS = 5000;
+
+async function stopServer(server) {
+  const { child } = server;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.off("exit", finish);
+      child.off("error", finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, SERVER_STOP_TIMEOUT_MS);
+
+    child.once("exit", finish);
+    child.once("error", finish);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      finish();
+      return;
+    }
+
+    try {
+      if (!child.kill()) finish();
+    } catch {
+      finish();
+    }
+  });
+}
+
+test("stopServer waits for an active child to exit", async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => {
+    setImmediate(() => {
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+    });
+    return true;
+  };
+
+  await stopServer({ child });
+
+  assert.equal(child.exitCode, 0);
+});
+
+test("stopServer preserves cleanup when the child already exited", async () => {
+  const child = new EventEmitter();
+  child.exitCode = 0;
+  child.signalCode = null;
+  let killCalls = 0;
+  child.kill = () => {
+    killCalls += 1;
+    return false;
+  };
+
+  await stopServer({ child });
+
+  assert.equal(killCalls, 0);
+});
+
 async function waitForStatusReady(output, port) {
   for (let attempt = 0; attempt < 80; attempt++) {
     try {
@@ -51,9 +117,9 @@ async function waitForStatusReady(output, port) {
 test("GET /api/status reports storage and maintenance state", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-status-test-"));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   const response = await waitForStatusReady(server.output, server.port);
@@ -75,9 +141,9 @@ test("GET /api/status reports storage and maintenance state", async (t) => {
 test("retired POST /api/backups route is absent", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-backups-route-test-"));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -92,9 +158,9 @@ test("retired POST /api/backups route is absent", async (t) => {
 test("retired POST /api/backups/restore route is absent", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-backups-restore-route-test-"));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -109,9 +175,9 @@ test("retired POST /api/backups/restore route is absent", async (t) => {
 test("MYBOX status explains a missing credential without affecting local startup", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-mybox-missing-token-test-"));
   const server = startServer(dataDir, { NAVER_MBOX_TOKEN: "", WEKI_MYBOX_CREDENTIAL_STATE: "missing" });
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -132,9 +198,9 @@ test("MYBOX status separates token authentication failure from missing credentia
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
   const apiBase = `http://127.0.0.1:${provider.address().port}/v1`;
   const server = startServer(dataDir, { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: apiBase, WEKI_MYBOX_CREDENTIAL_STATE: "available" });
-  t.after(() => {
-    server.child.kill();
-    return Promise.all([fs.rm(dataDir, { recursive: true, force: true }), new Promise((resolve) => provider.close(resolve))]);
+  t.after(async () => {
+    await stopServer(server);
+    await Promise.all([fs.rm(dataDir, { recursive: true, force: true }), new Promise((resolve) => provider.close(resolve))]);
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -149,9 +215,9 @@ test("MYBOX status separates token authentication failure from missing credentia
 test("failed registration remains visible without creating a document", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-registration-test-"));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -181,9 +247,9 @@ test("relinking the same Hash keeps one physical original and the document filen
     jobs: [], synonyms: [], feedback: [], audit: [],
   }));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
-    return fs.rm(dataDir, { recursive: true, force: true });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
   });
 
   await waitForStatusReady(server.output, server.port);
@@ -205,8 +271,8 @@ test("storage migration accepts an existing empty destination folder", async (t)
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-migration-source-"));
   const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-migration-target-"));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
+  t.after(async () => {
+    await stopServer(server);
     return Promise.all([
       fs.rm(dataDir, { recursive: true, force: true }),
       fs.rm(targetDir, { recursive: true, force: true }),
@@ -243,8 +309,8 @@ test("storage migration rebases document originals to the new store", async (t) 
   await fs.mkdir(path.join(dataDir, "credentials"), { recursive: true });
   await fs.writeFile(path.join(dataDir, "credentials", "mybox-token.json"), JSON.stringify({ format: "weki-credential", version: 1, provider: "mybox", ciphertext: "opaque" }));
   const server = startServer(dataDir);
-  t.after(() => {
-    server.child.kill();
+  t.after(async () => {
+    await stopServer(server);
     return Promise.all([
       fs.rm(dataDir, { recursive: true, force: true }),
       fs.rm(targetDir, { recursive: true, force: true }),
@@ -293,9 +359,9 @@ test("MYBOX sync imports only the catalog and lazy-downloads an original once", 
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
   const apiBase = `http://127.0.0.1:${provider.address().port}/v1`;
   const app = startServer(dataDir, { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: apiBase });
-  t.after(() => {
-    app.child.kill();
-    return Promise.all([fs.rm(dataDir, { recursive: true, force: true }), new Promise((resolve) => provider.close(resolve))]);
+  t.after(async () => {
+    await stopServer(app);
+    await Promise.all([fs.rm(dataDir, { recursive: true, force: true }), new Promise((resolve) => provider.close(resolve))]);
   });
 
   await waitForStatusReady(app.output, app.port);

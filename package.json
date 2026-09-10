@@ -8,7 +8,7 @@
     "start": "node server.mjs",
     "start:v2": "node scripts/start-v2.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:e2e": "node --test test/electron-e2e.test.mjs",
+    "test:e2e": "node --test test/electron-e2e.test.mjs test/onboarding-e2e.test.mjs",
     "build": "vite build",
     "benchmark:search:v2": "node scripts/benchmark-search-v2.mjs",
     "evaluate:search:v2": "node scripts/evaluate-search-v2.mjs",

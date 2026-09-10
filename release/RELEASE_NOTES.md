@@ -8,10 +8,11 @@
 
 ## 검증
 
-- `npm test`: 178 passed / 7 failed / 0 skipped
-- 알려진 `test_data` fixture 누락: PDF/HWPX 관련 6건 실패. fixture는 추가하거나 복사하지 않았습니다.
-- 별도 비-fixture 실패: runtime 구성요소 UI contract가 `고급 관리` 문구를 요구하지만 현재 `src/main.js`에는 없습니다.
-- `npm run test:e2e`: 0 passed / 1 failed / 0 skipped. PDF fixture가 없어 Electron 실행 전에 실패했습니다.
+- `npm test`: 193 passed / 6 failed / 0 skipped
+- 알려진 `test_data` fixture 누락: PDF/HWPX 관련 6건 실패. fixture는 추가하거나 복사하지 않았습니다. 제품·온보딩·상태 API 계약은 통과했습니다.
+- `npm run test:e2e`: 1 passed / 1 failed / 0 skipped. fixture-free 온보딩 E2E는 통과했고, 기존 PDF fixture E2E는 fixture가 없어 Electron 실행 전에 실패했습니다.
+- `node --test test/onboarding-e2e.test.mjs`: 1 passed / 0 failed
+- `node --test test/status-api.test.mjs`: 12 passed / 0 failed
 - `npm run build`: 통과
 - `npm run dist:win`: 통과
 - 패키지 버전 `1.2.1`, SHA-256 및 SHA-512 검증 완료

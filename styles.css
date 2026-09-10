@@ -11,3 +11,32 @@
 .runtime-row-action{margin-left:auto;min-height:36px;padding:6px 12px;font-size:13px;flex:0 0 auto}.runtime-row-action:disabled{border-color:var(--line);color:var(--muted);background:var(--surface-low)}.runtime-batch-message{margin:12px 0 0;padding:10px 12px;border-radius:var(--radius);background:var(--surface-low)}
 .brand-mark img{object-fit:contain;padding:3px}.mybox-credential-editor{border-top:1px solid var(--line);margin-top:14px;padding-top:4px}.token-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.token-actions input{flex:1 1 280px;min-width:0;border:1px solid var(--line);border-radius:var(--radius);padding:10px;background:var(--paper)}.token-actions button{flex:0 0 auto}.mybox-credential-editor .muted{margin:8px 0}.bad-dot{height:8px;width:8px;background:var(--error);border-radius:50%;display:inline-block}
 .evidence-toggle{border:0;background:transparent;color:var(--primary);font-size:13px;font-weight:700;padding:2px 0;min-height:32px}.synonym-entry{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding:9px 0;flex-wrap:wrap}.synonym-entry small{color:var(--muted);margin-left:auto}.synonym-entry button,.synonym-suggestions button{border:1px solid var(--line);background:var(--paper);border-radius:var(--radius);padding:4px 8px;min-height:32px;font-size:12px;color:var(--primary)}.synonym-suggestions{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}.synonym-suggestions>b{display:block;margin-bottom:6px;color:var(--muted)}
+
+/* Optional first-run coach-mark tour. The overlay is deliberately isolated from app layout. */
+.onboarding-root{position:fixed;inset:0;z-index:40;pointer-events:none;isolation:isolate}
+.onboarding-scrim{position:absolute;inset:0;background:rgba(8,12,58,.68);pointer-events:auto;animation:onboarding-fade-in .18s ease-out both}
+.onboarding-spotlight{position:fixed;z-index:1;border:2px solid #aeb8ff;border-radius:calc(var(--card-radius) + 2px);box-shadow:0 0 0 9999px rgba(8,12,58,.68),0 0 0 5px rgba(174,184,255,.2),0 8px 24px rgba(0,0,0,.24);pointer-events:none;transition:top .18s ease,left .18s ease,width .18s ease,height .18s ease;animation:onboarding-spotlight-in .2s ease-out both}
+.onboarding-spotlight[hidden]{display:none}
+.onboarding-dialog{position:relative;z-index:2;display:flex;flex-direction:column;width:min(440px,calc(100vw - 32px));max-height:min(560px,calc(100vh - 32px));overflow:auto;margin:16px auto;padding:28px 30px 24px;background:var(--paper);color:var(--ink);border:1px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.34),0 0 0 1px rgba(0,6,102,.16);pointer-events:auto;animation:onboarding-card-in .22s cubic-bezier(.2,.8,.2,1) both}
+.onboarding-dialog:focus{outline:0}
+.onboarding-close{align-self:flex-end;display:grid;place-items:center;width:40px;height:40px;min-height:40px;margin:-17px -19px 2px 0;padding:0;border:1px solid transparent;border-radius:50%;background:transparent;color:var(--muted);font-size:26px;line-height:1}
+.onboarding-close:hover{background:var(--surface-low);color:var(--primary)}
+.onboarding-progress{margin:0 0 10px;color:var(--accent);font:700 12px "JetBrains Mono",monospace;letter-spacing:.08em}
+.onboarding-title{margin:0;color:var(--primary);font-size:25px;line-height:1.28;letter-spacing:-.03em}
+.onboarding-description{margin:12px 0 0;color:var(--muted);font-size:16px;line-height:1.7}
+.onboarding-hint{margin:18px 0 0;padding:10px 12px;border:1px solid #cbd2ff;border-radius:var(--radius);background:#f1f3ff;color:var(--primary);font-size:13px;line-height:1.5}
+.onboarding-actions{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:26px;padding-top:18px;border-top:1px solid var(--line)}
+.onboarding-actions button{min-height:44px}
+.onboarding-skip{padding:8px 0;border:0;background:transparent;color:var(--muted);font-size:14px;text-decoration:underline;text-underline-offset:3px}
+.onboarding-skip:hover{color:var(--primary)}
+.onboarding-navigation{display:flex;justify-content:flex-end;gap:8px;margin-left:auto}
+.onboarding-navigation .secondary,.onboarding-navigation .primary{min-width:76px}
+.onboarding-root[data-onboarding-fallback="true"] .onboarding-spotlight{display:none}
+.onboarding-root[data-onboarding-fallback="true"]{display:grid;place-items:center}
+.onboarding-root[data-onboarding-fallback="true"] .onboarding-dialog{margin:0}
+@keyframes onboarding-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes onboarding-spotlight-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
+@keyframes onboarding-card-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:580px){.onboarding-dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px);margin:10px;padding:22px 20px 18px;border-radius:12px}.onboarding-close{margin:-12px -10px 0 0}.onboarding-title{font-size:22px}.onboarding-description{font-size:15px}.onboarding-actions{align-items:stretch;flex-direction:column;gap:10px;margin-top:20px;padding-top:14px}.onboarding-navigation{width:100%;margin-left:0}.onboarding-navigation button{flex:1}.onboarding-skip{align-self:flex-start;min-height:40px}}
+@media(max-width:1279px){.sidebar .help{display:grid;place-items:center;min-height:44px;padding-inline:8px;font-size:0}.sidebar .help::before{content:"?";font-size:18px;font-weight:700}}
+@media(prefers-reduced-motion:reduce){.onboarding-scrim,.onboarding-spotlight,.onboarding-dialog{animation:none;transition:none}}
