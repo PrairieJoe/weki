@@ -86,6 +86,9 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
       await page.waitForSelector("#query", { timeout: 30_000 });
     } else throw new Error(`${error.message}\nURL: ${page.url()}\nBODY: ${await page.locator("body").innerText().catch(() => "")}\n${processOutput}`);
   }
+  await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
+  await page.locator("[data-onboarding-skip]").click();
+  await page.waitForSelector("#onboarding-root", { state: "detached", timeout: 15_000 });
   await page.locator('button.nav-item[data-nav="add"]').click();
   await page.locator("#file-input").setInputFiles(source);
   await page.locator("#create-job").click();
