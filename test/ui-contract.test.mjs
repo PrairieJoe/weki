@@ -14,7 +14,11 @@ const statusApiTest = await readFile(new URL("../test/status-api.test.mjs", impo
 const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 const runScript = await readFile(new URL("../run-weki.bat", import.meta.url), "utf8");
 const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.meta.url), "utf8");
+const latestYml = await readFile(new URL("../release/latest.yml", import.meta.url), "utf8");
+const sha256 = await readFile(new URL("../release/SHA256.txt", import.meta.url), "utf8");
+const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
 const preload = await readFile(preloadUrl, "utf8").catch(() => "");
 
@@ -243,7 +247,17 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
 
 test("Weki release metadata is promoted to v1.2.1", () => {
   assert.equal(packageJson.version, "1.2.1");
+  assert.equal(packageLock.version, "1.2.1");
+  assert.equal(packageLock.packages?.[""].version, "1.2.1");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
+  assert.match(main, /APP_VERSION\s*=|APP_VERSION/);
+  assert.match(main, /앱 버전/);
+  assert.match(releaseNotesV121, /1\.2\.1/);
+  assert.match(buildInfo, /Application version:\s*1\.2\.1/);
+  assert.match(buildInfo, /Weki-1\.2\.1-Setup\.exe/);
+  assert.match(latestYml, /version:\s*1\.2\.1/);
+  assert.match(latestYml, /Weki-1\.2\.1-Setup\.exe/);
+  assert.match(sha256, /Weki-1\.2\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(readme, /v1\.2\.0 개선사항/);
   assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
 });
@@ -390,7 +404,7 @@ test("Weki refreshes active jobs before deciding whether runtime install may res
   assert.ok(polling.indexOf('fetch("/api/jobs")') < polling.indexOf("scheduleRuntimeRestart"));
 });
 
-test("Weki exposes user-facing full search reindex controls", () => {
+test("Weki removes retired controls and exposes the v1.2.1 version surface", () => {
   assert.doesNotMatch(main, /암호화 백업 및 복원/);
   assert.doesNotMatch(main, /검색 색인 다시 만들기/);
   assert.doesNotMatch(main, /data-backup/);
