@@ -4,8 +4,6 @@ import path from "node:path";
 
 import { normalizeOriginalName } from "./original-storage.mjs";
 
-export const BACKUP_FORMAT = "weki-cloud-backup";
-export const BACKUP_VERSION = 1;
 export const FOLDER_BACKUP_FORMAT = "weki-cloud-folder-backup";
 export const FOLDER_BACKUP_VERSION = 2;
 
@@ -56,35 +54,6 @@ const mergeSynonyms = (left, right) => {
   }
   return result;
 };
-
-export async function createBackupSnapshot(db, originalsDir, { now = () => new Date().toISOString(), readFile = fs.readFile, resolveOriginalPath = (doc) => doc.originalPath } = {}) {
-  const documents = listOrEmpty(db.documents).map(withoutAbsoluteOriginalPath);
-  const originals = {};
-  for (const doc of listOrEmpty(db.documents)) {
-    const originalPath = resolveOriginalPath(doc);
-    if (!["available", "local_available"].includes(doc.sourceStatus) || !originalPath) continue;
-    const bytes = await readFile(originalPath);
-    const actualHash = crypto.createHash("sha256").update(bytes).digest("hex");
-    if (doc.hash && actualHash !== doc.hash) throw new Error(`원본 Hash가 문서와 일치하지 않습니다: ${doc.name || doc.id}`);
-    const hash = doc.hash || actualHash;
-    originals[hash] = { name: normalizeOriginalName(doc.originalName || doc.name || path.basename(originalPath)), format: doc.format, data: Buffer.from(bytes).toString("base64") };
-  }
-  const createdAt = now();
-  return {
-    format: BACKUP_FORMAT,
-    version: BACKUP_VERSION,
-    type: "full",
-    createdAt,
-    manifest: {
-      documentCount: documents.length,
-      originalCount: Object.keys(originals).length,
-      createdAt,
-      source: "Weki",
-    },
-    database: { ...clone(db), documents, jobs: [], maintenance: null },
-    originals,
-  };
-}
 
 const collisionSafeName = (name, hash, usedNames) => {
   if (!usedNames.has(name)) return name;
@@ -154,18 +123,6 @@ export function removeDocumentData(db, documentId, deletedAt = new Date().toISOS
   if (!document) throw new Error("문서를 찾을 수 없습니다.");
   const database = { ...clone(db), documents: listOrEmpty(db.documents).filter((item) => item.id !== documentId), jobs: listOrEmpty(db.jobs).filter((job) => job.documentId !== documentId), audit: [{ id: crypto.randomUUID(), type: "document-delete", documentId, createdAt: deletedAt, detail: `${document.name || documentId} 문서 삭제` }, ...listOrEmpty(db.audit)] };
   return { database, document: clone(document) };
-}
-
-export function validateBackupSnapshot(snapshot) {
-  if (!snapshot || snapshot.format !== BACKUP_FORMAT || snapshot.version !== BACKUP_VERSION || snapshot.type !== "full") throw new Error("유효하지 않은 Weki 백업 패키지입니다.");
-  if (!snapshot.manifest || !Number.isInteger(snapshot.manifest.documentCount) || !snapshot.database || !Array.isArray(snapshot.database.documents) || !snapshot.originals || typeof snapshot.originals !== "object") throw new Error("백업 Manifest 또는 데이터가 손상되었습니다.");
-  if (snapshot.manifest.documentCount !== snapshot.database.documents.length) throw new Error("백업 문서 수가 Manifest와 일치하지 않습니다.");
-  for (const [hash, original] of Object.entries(snapshot.originals)) {
-    if (!/^[a-f0-9]{64}$/i.test(hash) || !original?.data) throw new Error("백업 원본 데이터가 손상되었습니다.");
-    const actualHash = crypto.createHash("sha256").update(Buffer.from(original.data, "base64")).digest("hex");
-    if (actualHash !== hash) throw new Error("백업 원본 Hash 검증에 실패했습니다.");
-  }
-  return snapshot;
 }
 
 export function mergeDatabases(localDb, remoteDb) {

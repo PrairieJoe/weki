@@ -14,7 +14,7 @@ import engData from "@tesseract.js-data/eng";
 import korData from "@tesseract.js-data/kor";
 import { parse as parseHwp } from "hwp.js";
 import { createServer as createViteServer } from "vite";
-import { buildPageMetrics, createBackupSnapshot, createFolderSnapshot, reconcileFolderSnapshotOriginals, removeDocumentData } from "./src/server/backup.mjs";
+import { buildPageMetrics, createFolderSnapshot, reconcileFolderSnapshotOriginals, removeDocumentData } from "./src/server/backup.mjs";
 import { ACTIVE_JOB_STATUSES, visibleJobs } from "./src/server/jobs.mjs";
 import { createMyboxClient } from "./src/server/mybox.mjs";
 import { CLOUD_CATALOG_NAME, CLOUD_RUNTIME_MANIFEST_NAME, CLOUD_RUNTIME_ROOT_NAME, CLOUD_RUNTIME_VERSION_NAME, downloadCloudOriginal, findCloudOriginalResource, findRuntimeFolderStructure, findRuntimeResource, findWekiFolderStructure, mergeCloudCatalog, readCloudCatalog, shouldRunInitialMyboxSync } from "./src/server/mybox-sync.mjs";
@@ -54,7 +54,6 @@ loadEnvFile();
 const dataDir = process.env.WEKI_DATA_DIR || path.join(root, ".weki-data");
 const originalsDir = path.join(dataDir, "originals");
 const incomingDir = path.join(dataDir, "incoming");
-const backupsDir = path.join(dataDir, "backups");
 const tessdataDir = path.join(dataDir, "tessdata");
 const credentialsDir = path.join(dataDir, "credentials");
 const dbPath = path.join(dataDir, "knowledge-base.json");
@@ -66,7 +65,6 @@ async function ensureStore() {
   let databaseCreated = false;
   await fs.mkdir(originalsDir, { recursive: true });
   await fs.mkdir(incomingDir, { recursive: true });
-  await fs.mkdir(backupsDir, { recursive: true });
   await fs.mkdir(tessdataDir, { recursive: true });
   await fs.mkdir(credentialsDir, { recursive: true });
   for (const [language, source] of [["eng", engData.langPath], ["kor", korData.langPath]]) {
@@ -393,16 +391,6 @@ async function runQueue() {
     }
   } finally { queueRunning = false; }
 }
-const encryptBackup = (payload, passphrase) => {
-  const salt = crypto.randomBytes(16); const iv = crypto.randomBytes(12); const key = crypto.scryptSync(passphrase, salt, 32);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
-  return JSON.stringify({ format: "weki-backup", version: 1, salt: salt.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), ciphertext: ciphertext.toString("base64") });
-};
-const decryptBackup = (raw, passphrase) => {
-  const envelope = JSON.parse(raw); if (envelope.format !== "weki-backup" || envelope.version !== 1) throw new Error("지원하지 않는 백업 형식입니다.");
-  const key = crypto.scryptSync(passphrase, Buffer.from(envelope.salt, "base64"), 32); const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64")); decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
-  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "base64")), decipher.final()]).toString("utf8"));
-};
 const createLocalOcrWorker = () => createWorker("eng+kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
 const createVisualOcrWorker = () => createWorker(process.env.WEKI_VISUAL_OCR_LANG || "kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
 const tokens = (query) => query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [];
@@ -1197,33 +1185,6 @@ app.delete("/api/synonyms/:id", async (req, res) => {
   await writeDb(db); res.status(204).end();
 });
 app.post("/api/feedback", async (req, res) => { const db = await readDb(); if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 피드백을 기록할 수 없습니다." }); const feedback = { id: crypto.randomUUID(), query: String(req.body?.query || ""), documentId: req.body?.documentId || null, helpful: Boolean(req.body?.helpful), createdAt: new Date().toISOString() }; db.feedback.unshift(feedback); await writeDb(db); res.status(201).json({ feedback }); });
-app.post("/api/backups", async (req, res) => {
-  const { type = "search", passphrase } = req.body || {};
-  if (!["search", "full"].includes(type)) return res.status(400).json({ error: "백업 유형이 올바르지 않습니다." });
-  if (!passphrase || passphrase.length < 8) return res.status(400).json({ error: "백업 암호는 8자 이상이어야 합니다." });
-  const db = await readDb(); if (activeJobs(db).length || db.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
-  db.maintenance = { type: `${type}-backup`, startedAt: new Date().toISOString() }; await writeDb(db);
-  try {
-    const payload = { type, createdAt: new Date().toISOString(), database: { ...db, maintenance: null, documents: db.documents.map((doc) => ({ ...doc, originalKey: type === "full" ? documentOriginalKey(doc) : null })) }, originals: {} };
-    if (type === "full") for (const doc of db.documents.filter((item) => ["available", "local_available"].includes(item.sourceStatus))) { const originalPath = resolveDocumentOriginalPath(dataDir, doc); const hash = String(doc.hash || "").toLowerCase(); if (!originalPath || !/^[a-f0-9]{64}$/.test(hash)) continue; payload.originals[hash] = { name: originalNameOf(doc, path.basename(originalPath)), format: doc.format, data: (await fs.readFile(originalPath)).toString("base64") }; }
-    const fileName = `weki-${type}-${Date.now()}.weki`; await fs.writeFile(path.join(backupsDir, fileName), encryptBackup(payload, passphrase));
-    db.maintenance = null; db.audit.unshift({ id: crypto.randomUUID(), type: "backup", detail: `${type} backup created`, createdAt: new Date().toISOString() }); await writeDb(db);
-    res.status(201).json({ fileName, path: path.join(backupsDir, fileName), type });
-  } catch (error) { db.maintenance = null; await writeDb(db); res.status(500).json({ error: error.message }); }
-});
-app.post("/api/backups/restore", upload.single("backup"), async (req, res) => {
-  const passphrase = req.body?.passphrase; if (!req.file || !passphrase) return res.status(400).json({ error: "백업 파일과 암호가 필요합니다." });
-  const current = await readDb(); if (activeJobs(current).length || current.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
-  current.maintenance = { type: "restore", startedAt: new Date().toISOString() }; await writeDb(current);
-  try {
-    const payload = decryptBackup(req.file.buffer.toString("utf8"), passphrase); if (!payload.database?.documents || !["search", "full"].includes(payload.type)) throw new Error("유효하지 않은 백업 내용입니다.");
-    const restored = payload.database; restored.maintenance = null; restored.jobs = []; restored.audit ??= [];
-    if (payload.type === "search") restored.documents.forEach((doc) => { doc.sourceStatus = "unavailable"; doc.originalKey = null; delete doc.originalPath; });
-    else { await fs.mkdir(originalsDir, { recursive: true }); for (const doc of restored.documents) { const currentKey = documentOriginalKey(doc); const stored = (doc.hash && payload.originals?.[doc.hash]) || (currentKey && payload.originals?.[currentKey]); const data = typeof stored === "string" ? stored : stored?.data; const originalName = normalizeOriginalName(stored?.name || doc.originalName || doc.name, doc.hash ? `${doc.hash}.${String(doc.format || "bin").toLowerCase()}` : "original.bin"); const originalKey = doc.hash && data ? `${doc.hash}/${originalName}` : currentKey; if (!data || !originalKey) { doc.sourceStatus = "unavailable"; doc.originalKey = originalKey; delete doc.originalPath; } else { doc.originalName = doc.originalName || originalName; doc.originalKey = originalKey; const originalPath = resolveDocumentOriginalPath(dataDir, doc); await writeOriginalAtomically(originalPath, Buffer.from(data, "base64")); delete doc.originalPath; doc.sourceStatus = "local_available"; } } }
-    restored.audit.unshift({ id: crypto.randomUUID(), type: "restore", detail: `${payload.type} backup restored`, createdAt: new Date().toISOString() }); await writeDb(restored);
-    res.json({ type: payload.type, documents: restored.documents.length, sourceStatus: payload.type === "search" ? "unavailable" : "local_available" });
-  } catch (error) { current.maintenance = null; await writeDb(current); res.status(422).json({ error: "복원에 실패했습니다. 기존 데이터는 유지됩니다.", detail: error.message }); }
-});
 app.post("/api/mybox/upload", async (_req, res) => {
   const current = await readDb(); if (activeJobs(current).length || current.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
   current.maintenance = { type: "mybox-upload", startedAt: new Date().toISOString() }; await writeDb(current);
