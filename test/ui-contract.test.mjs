@@ -252,6 +252,7 @@ test("Weki release metadata is promoted to v1.2.1", () => {
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(main, /APP_VERSION\s*=|APP_VERSION/);
   assert.match(main, /앱 버전/);
+  assert.match(main, /앱 버전[^`<>]{0,80}1\.2\.1/);
   assert.match(releaseNotesV121, /1\.2\.1/);
   assert.match(buildInfo, /Application version:\s*1\.2\.1/);
   assert.match(buildInfo, /Weki-1\.2\.1-Setup\.exe/);
