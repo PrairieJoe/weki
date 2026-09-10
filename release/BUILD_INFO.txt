@@ -1,16 +1,16 @@
-Source state: clean HEAD at 08e068a
-Build date/time: 2026-09-10 11:08:08 +09:00
+Source state: clean HEAD at d681922
+Build date/time: 2026-09-10 15:42:27 +09:00
 Application version: 1.2.1
 Installer file name: Weki-1.2.1-Setup.exe
-Installer size: 232093782 bytes
+Installer size: 232100672 bytes
 Installer path: release/Weki-1.2.1-Setup.exe
-Installer SHA-256: BA5507A448C9ED694A8FFCC0A04719AFA4DD9E76726F929509141E01A41E6F98
-Installer SHA-512: BB6F315F7A2E328FCF723688400B481009A85F22EA3F0A009CF13256D44279C70B8430607BC447F2172D5B3B2B32DBA2F128600E53391F7D0E056BE856864034
-npm test: 178 passed, 7 failed, 0 skipped
+Installer SHA-256: 207EFFF0E7C550C5D991D62E64F39123ADC78407072F4E105C314353EBD1DC81
+Installer SHA-512: FB32464869167FF662A4E2ABE47F1EFE6B283792A10BDE3CFC7CD52BB655DF7335CFBFAD586392627CE9A6DC72C2AAEE4EFBDFB23B25DFFE5304F60937FC52BF
+npm test: 193 passed, 6 failed, 0 skipped
 Known missing test_data fixture failures: 6 (PDF/HWPX fixture files absent; no fixtures added)
-Non-fixture test failure: 1 (runtime component UI contract expects the missing "고급 관리" text)
-npm run test:e2e: 0 passed, 1 failed, 0 skipped (missing PDF test_data fixture; Electron not launched)
+Non-fixture test failures: 0 (status-api Windows SQLite cleanup race fixed; onboarding contracts pass)
+npm run test:e2e: 1 passed, 1 failed, 0 skipped (fixture-free onboarding passed; existing PDF fixture test could not start)
 npm run build: PASS
 npm run dist:win: PASS
-Packaging check: PASS (packaged version 1.2.1; app.asar, renderer output, bundled reranker path and entrypoints present)
-Release status: v1.2.1 ARTIFACT VERIFIED; TEST SUITE LIMITED BY 6 MISSING-FIXTURE FAILURES AND 1 NON-FIXTURE UI CONTRACT FAILURE
+Packaging check: PASS (packaged version 1.2.1; app.asar contains onboarding controller, replay hook and fallback CSS)
+Release status: v1.2.1 ARTIFACT VERIFIED; TEST SUITE LIMITED BY 6 MISSING-FIXTURE FAILURES
