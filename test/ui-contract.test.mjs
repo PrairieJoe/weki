@@ -248,19 +248,19 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki source release metadata targets v1.2.2 while preserving the v1.2.1 artifact snapshot", () => {
+test("Weki source and packaged release metadata target v1.2.2", () => {
   assert.equal(packageJson.version, "1.2.2");
   assert.equal(packageLock.version, "1.2.2");
   assert.equal(packageLock.packages?.[""].version, "1.2.2");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.2\.1/);
-  assert.match(buildInfo, /Weki-1\.2\.1-Setup\.exe/);
-  assert.match(latestYml, /version:\s*1\.2\.1/);
-  assert.match(latestYml, /Weki-1\.2\.1-Setup\.exe/);
-  assert.match(sha256, /Weki-1\.2\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
-  assert.match(readme, /v1\.2\.0 개선사항/);
-  assert.match(readme, /release\/Weki-1\.2\.0-Setup\.exe/);
+  assert.match(buildInfo, /Application version:\s*1\.2\.2/);
+  assert.match(buildInfo, /Weki-1\.2\.2-Setup\.exe/);
+  assert.match(latestYml, /version:\s*1\.2\.2/);
+  assert.match(latestYml, /Weki-1\.2\.2-Setup\.exe/);
+  assert.match(sha256, /Weki-1\.2\.2-Setup\.exe\s+[A-Fa-f0-9]{64}/);
+  assert.match(readme, /v1\.2\.2 현재 정책/);
+  assert.match(readme, /release\/Weki-1\.2\.2-Setup\.exe/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);

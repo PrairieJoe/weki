@@ -275,4 +275,40 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
     assert.ok(renderer);
     assert.equal(renderer.actionLeft, null);
   }
+
+  for (const viewport of [{ width: 320, height: 700 }, { width: 375, height: 700 }, { width: 580, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const mobileLayout = await page.locator("#runtime-components-card").evaluate((card) => {
+      const cardRect = card.getBoundingClientRect();
+      const header = card.querySelector(".runtime-card-header");
+      const title = header?.querySelector("h2")?.getBoundingClientRect();
+      const installAll = header?.querySelector("[data-runtime-install-all]")?.getBoundingClientRect();
+      const rows = [...card.querySelectorAll(".engine")].map((row) => {
+        const status = row.querySelector("em")?.getBoundingClientRect();
+        const action = row.querySelector(".runtime-row-action")?.getBoundingClientRect();
+        return { status, action };
+      });
+      return {
+        cardRight: cardRect.right,
+        cardLeft: cardRect.left,
+        mainRect: document.querySelector("main")?.getBoundingClientRect(),
+        gridRect: card.parentElement?.getBoundingClientRect(),
+        viewportWidth: window.innerWidth,
+        cardScrollWidth: card.scrollWidth,
+        cardClientWidth: card.clientWidth,
+        title,
+        installAll,
+        rows,
+      };
+    });
+    assert.ok(mobileLayout.cardRight <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime card exceeds viewport: ${JSON.stringify(mobileLayout)}`);
+    assert.ok(mobileLayout.cardScrollWidth <= mobileLayout.cardClientWidth + 1, `${viewport.width}px runtime card content overflows`);
+    assert.ok(mobileLayout.title && mobileLayout.installAll);
+    assert.ok(mobileLayout.title.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime title is clipped`);
+    assert.ok(mobileLayout.installAll.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px install-all button is clipped`);
+    for (const row of mobileLayout.rows) {
+      assert.ok(row.status && row.status.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime status is clipped`);
+      if (row.action) assert.ok(row.action.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime action is clipped`);
+    }
+  }
 });
