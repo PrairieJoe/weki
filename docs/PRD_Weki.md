@@ -139,7 +139,7 @@
 - 문서 관리 및 재처리
 - Processing Job Queue
 - 저장소 이전
-- 검색 시스템 백업 / 전체 백업 / 복원
+- MYBOX 백업 / 검색 DB 카탈로그 동기화 / 원본 지연 복원
 - 외부 AI Provider 설정
 - Custom/OpenAI-compatible Endpoint
 - 사용자 동의어·약어 사전
@@ -306,9 +306,7 @@ Bounding Box 등 내부 정밀 위치정보의 저장 방식과 질의별 Eviden
 상태 복잡성과 데이터 불일치를 줄이기 위해 다음 관리 작업은 **Processing Queue가 완전히 비어 있을 때만 시작**할 수 있다.
 
 - 저장소 이전
-- 검색 시스템 백업
-- 전체 백업
-- 복원
+- MYBOX 백업
 - 전체 문서 데이터 삭제
 
 `Processing Queue가 완전히 비어 있음`은 다음을 모두 만족하는 상태를 의미한다.
@@ -452,9 +450,9 @@ Lightweight Intelligence에서 인접 Page/Slide 관계 판단에 Embedding이 �
 - API Key
 - 동의어·약어 사전
 - 검색 점수 산정 정보
-- 검색 시스템 백업
-- 전체 백업
-- 복원
+- MYBOX 백업
+- MYBOX 검색 DB 카탈로그 동기화
+- MYBOX 원본 지연 복원
 - 보안 설정
 - 처리 로그
 - 외부 AI 감사 로그
@@ -1507,7 +1505,6 @@ Vector Search 또는 BM25/FTS 중 일부가 고장나더라도 정상 기능이 
 - 현재 상태
 - 영향 범위 설명
 - `[문제 확인]`
-- `[복구/재색인]`
 
 ## 14.2 일반 오류 표시
 
@@ -1576,137 +1573,11 @@ Stack Trace, 내부 오류 코드 등은 고급 로그에서 별도 확인한다
 
 ## 16.1 백업 유형
 
-1차 제품의 백업은 기존 로컬 호환 백업과 v1 MYBOX 클라우드 백업을 구분한다. 기존 로컬 백업은 하위 호환을 위해 유지하고, MYBOX는 §16.5의 분리 폴더 정책을 따른다.
+1차 제품에서 지원하는 백업 경로는 MYBOX뿐이다. 로컬 암호화 검색 시스템 백업, 로컬 전체 백업 및 로컬 `.weki` 복원은 지원하지 않는다. v1.2.1은 v1.2.0에서 생성한 로컬 `.weki` 백업을 생성하거나 복원하지 않으며, 기존 파일을 자동 변경·삭제하지 않는다.
 
-### A. 검색 시스템 백업(로컬 호환)
+백업과 카탈로그 동기화는 검색 DB와 원본 Archive를 MYBOX에 보존하고, 필요할 때 원본을 지연 복원하는 흐름으로 제공한다. API Key는 MYBOX 백업에 포함하지 않는다.
 
-원본 Archive와 운영/감사 로그는 제외한다.
-
-포함 대상:
-
-- Document / Source 관련 Metadata와 Hash 등 원본 재연결에 필요한 정보
-- OCR
-- Extracted Text
-- Processing Artifact
-- AI 전처리 결과
-- Knowledge Unit
-- **Visual Evidence 열람에 필요한 Visual Asset 또는 원본 검증 가능한 파생 미리보기**
-- Embedding / Search Index
-- 사용자 수정값
-- SynonymEntry 등 검색 동작에 필요한 사용자 사전
-- 일반 설정
-- 검색 피드백
-- 필요한 처리 상태/메타데이터
-- Backup Manifest 및 복원 검증에 필요한 메타정보
-
-제외 대상:
-
-- 원본 Archive
-- 일반 처리 로그
-- 외부 AI 감사 로그
-- API Key
-
-목적:
-
-> **비용이 큰 전처리 결과와 검색 시스템을 빠르게 복원하고, 원본 Archive가 없어도 보존된 Text/Visual Source Evidence를 열람 가능하게 유지**
-
-### B. 전체 백업(로컬 호환)
-
-검색 시스템 백업의 모든 항목에 다음을 추가한다.
-
-- 원본 Archive
-- 일반 처리 로그
-- 외부 AI 감사 로그
-
-API Key는 전체 백업에서도 제외한다.
-
-목적:
-
-> **디스크 또는 PC 전체 유실 상황까지 복구**
-
-전체 백업은 원본 PC를 사용할 수 없는 상황에서도 다른 지원 Windows PC에서 복원 가능해야 한다.
-
-## 16.2 백업 실행 정책
-
-1차 제품에서는 검색 시스템 백업과 전체 백업 모두 **수동 실행만 지원**한다.
-
-자동 스케줄 백업은 1차 범위에 포함하지 않는다.
-
-사용자 화면에서는 백업·복원이 일반 설정과 구분되도록 `고급 관리` 영역에서 제공하고, **다른 PC에서 검색 데이터 또는 전체 문서를 복구할 때 사용하는 기능**이라는 목적을 함께 안내한다.
-
-백업 시작 조건은 **§3.7 Maintenance Exclusive Operation**을 따른다.
-
-백업 실행 중 다음 읽기 기능은 허용한다.
-
-- 검색
-- 검색결과 열람
-- 원본 열기
-
-다만 백업 대상 데이터의 시점 일관성을 위해 백업이 끝날 때까지 다음 Write는 제한한다.
-
-- 문서 등록 / 삭제 / 재처리
-- 사용자 수정값 변경
-- 동의어·약어 변경
-- 일반 설정 변경
-- 검색 피드백 및 암묵적 Signal 기록
-- 기타 백업 대상 데이터를 변경하는 기능
-
-기존 로컬 호환 검색 시스템 백업과 전체 백업은 **항상 암호화**한다. 평문 로컬 백업 생성 옵션은 제공하지 않는다. v1 MYBOX 백업은 §16.5에 정의한 별도 초기 정책에 따라 원본 포함 평문 패키지로 동작하며, 업로드 전에 사용자에게 경고한다.
-
-구체적인 암호화 알고리즘·키 관리·Recovery Key/Passphrase 방식과 Snapshot/Lock 구현은 TRD에서 정의하되, 전체 백업의 암호화 방식이 원본 PC에만 종속되어 다른 지원 Windows PC에서의 복원을 막아서는 안 된다.
-
-## 16.3 복원 방식
-
-복원 시작 조건은 **§3.7 Maintenance Exclusive Operation**을 따른다.
-
-기존 로컬 호환 백업 복원은 현재 데이터와 병합하지 않고 **전체 교체 방식**으로 수행한다. MYBOX 검색 DB 동기화·업로드는 §16.5에 따라 Hash 기준 병합 방식으로 수행하고, 원본은 필요 시 지연 복원한다.
-
-복원 작업이 시작되면 완료·실패·사용자 중단으로 Maintenance 상태가 해제될 때까지 다음 기능을 차단한다.
-
-- 검색
-- 검색결과 열람
-- 원본 열기
-- 문서 등록 / 삭제 / 재처리
-- 사용자 수정값 변경
-- 동의어·약어 변경
-- 일반 설정 변경 등 데이터 상태를 변경하는 기능
-
-복원 전에 사용자에게 1회 명확히 경고한다.
-
-> **현재 데이터가 선택한 백업 시점의 상태로 덮어써집니다.**
-
-다만 복원은 **기존 정상 데이터를 직접 파괴하면서 진행해서는 안 된다.** 선택한 백업의 복원 데이터 구성과 무결성 검증이 성공한 뒤에만 새 상태로 전환해야 하며, 복원 도중 오류·강제종료·백업 손상·검증 실패가 발생하면 복원 직전의 기존 정상 데이터 상태를 유지해야 한다.
-
-복원 직전에 별도의 사용자용 자동 임시 백업 파일을 생성하는 기능은 1차에서 요구하지 않는다. 위 기존 데이터 보존 요구는 Staging/Transaction/Atomic Switch 또는 동등한 방식으로 만족해야 하며 구체 구현은 TRD에서 정의한다.
-
-API Key는 백업에 포함되지 않으므로 복원 후 External AI Provider 사용에 필요한 API Key는 사용자가 다시 입력해야 한다. API Key가 없어도 복원된 문서·전처리 결과·검색 인덱스의 검색 기능은 사용할 수 있어야 한다.
-
-## 16.4 로컬 검색 시스템 백업 복원 후 원본 누락
-
-로컬 호환 검색 시스템 백업은 원본 Archive를 포함하지 않으므로 **해당 백업으로 복원된 모든 Document는 복원 직후 `source_status = missing`으로 설정한다.**
-
-> **원본 누락**
-
-검색 시스템 백업 복원은 전체 교체 방식이므로 복원 전 저장소에 존재하던 SourceBlob/원본 Archive를 자동 재사용하거나 복원 데이터와 병합하지 않는다. 원본 복구는 복원 완료 후 사용자가 동일 Hash 원본을 일반 파일/디렉토리 등록 과정으로 다시 제공하여 Source Relink하는 방식으로 수행한다.
-
-전처리·검색 데이터가 정상이라면 검색은 계속 가능하다.
-
-검색 시스템 백업에 포함된 Extracted Text/OCR 및 Visual Evidence용 Visual Asset/미리보기가 정상이라면 **Evidence 열람 역시 계속 가능**하다.
-
-단 `원본 열기`는 제한된다.
-
-나중에 사용자가 동일 원본 파일을 일반 파일/디렉토리 등록 과정으로 다시 제공하면 Hash를 확인하여 기존 `원본 누락` Document에 자동 재연결한다.
-
-원본 재연결 시 기존 전처리 결과가 유효하면 다음을 다시 수행하지 않는다.
-
-- OCR 재실행
-- AI 전처리 재실행
-- Embedding 재생성
-- Index 재생성
-
-세부 Backup Package, Manifest, Integrity Verification, Cross-PC Recovery, Visual Asset 보존 형식, Source Relink 방식은 TRD에서 정의한다.
-
-## 16.5 v1 MYBOX 클라우드 백업 구현 기준
+## 16.2 v1 MYBOX 클라우드 백업 구현 기준
 
 v1의 MYBOX는 검색 DB 카탈로그와 원본 Archive를 분리해서 동기화한다. `knowledge-base.json`에는 문서·본문·임베딩과 원본 참조를 저장하고, 실제 원본은 사용자가 필요할 때만 지연 다운로드한다. 업로드는 검색 DB와 로컬 원본을 함께 백업하는 단일 동작이며 업로드 전에 평문·원본 포함 경고를 표시한다.
 
@@ -1735,9 +1606,15 @@ MYBOX/
 - 신규 버전은 `weki/knowledge-base.json`, `weki/data/`, `weki/data/<파일 Hash>/`, 그 하위의 manifest 파일만 조회한다. 루트 `data`, `weki/data/<파일명>`, Hash 파일명만 있는 flat 구조와 기존 `.weki` 파일은 백업 대상으로 취급하지 않으며 기존 파일을 자동 변경·삭제하지 않는다.
 - 클라우드 백업의 절대 `originalPath`는 저장하지 않는다. 로컬 원본은 현재 저장소의 `originals/<hash>/<원본 파일명>`으로 재구성하고, MYBOX 참조는 `cloudOriginalFile: data/<hash>/<원본 파일명>`으로 저장한다. 문서에는 `originalName`을 보존하며, 동일 Hash의 실제 원본은 하나만 저장한다.
 - 최신 `knowledge-base.json` 하나를 유지하고, 기존 원본 파일은 자동 삭제하지 않는다.
-- 기존 단일 `.weki` 백업은 새 버전에서 복원하지 않으며 기존 파일은 삭제하지 않는다.
+- 기존 단일 `.weki` 백업은 v1.2.1에서 복원하지 않으며 기존 파일은 삭제하지 않는다.
 
 MYBOX 연동은 MYBOX Open API의 파일 목록 조회, 업로드 URL 발급·전송, 다운로드 URL 발급·전송의 2단계 API를 사용한다. 설치 프로그램은 `NAVER_MBOX_TOKEN`을 선택적으로 입력받고, 입력값을 선택한 Weki 데이터 저장소의 `credentials/mybox-token.json`에 Windows DPAPI 기반으로 암호화한다. 설치 파일과 레지스트리에는 토큰을 저장하지 않으며, 패키지 실행 시 Electron이 복호화한 값을 서버 프로세스의 환경변수로만 전달한다. 설치 단계에서는 네트워크 검증을 하지 않고 최초 실행 시 `/api/mybox/status`로 검증한다. 토큰이 없거나 검증에 실패해도 로컬 기능은 유지하고 관리자 문의를 안내한다. 기존 `.env` 방식 설치판의 토큰은 자동 이관하지 않으며 업데이트 시 다시 입력한다. 공개·외부 배포 단계에서는 이 방식을 폐기하고 별도 인증·Secret 관리 구조로 전환한다.
+
+## 16.3 검색 색인과 재처리 경계
+
+사용자 설정 화면에서는 검색 색인 관리 UI를 제공하지 않는다. 내부 검색 색인 재생성 API는 기존 파싱 단위에서 FTS·Embedding·ANN 투영을 다시 만드는 마이그레이션·복구용 API로만 유지한다.
+
+전체 문서 재처리(원본 → 파싱·OCR·AI·Embedding·색인 재실행)는 v1.2.1 범위가 아니며 v1.3.0 검토 항목으로 명시적으로 연기한다.
 
 # 17. 삭제 정책
 
@@ -1855,7 +1732,7 @@ Windows 사용자 계정의 접근통제를 기본 전제로 한다.
 
 Archive/DB/Index/Cache별 구체 암호화 범위·알고리즘·키 관리 방식은 TRD의 Threat Model과 보안 설계에서 결정한다.
 
-보안 구현은 §16의 Cross-PC 전체 백업 복원을 방해해서는 안 된다. 1차 사내 배포판의 제거 후 재설치는 새 저장소 선택을 전제로 한다.
+보안 구현은 MYBOX 백업·카탈로그 동기화·원본 지연 복원 흐름을 방해해서는 안 된다. 1차 사내 배포판의 제거 후 재설치는 새 저장소 선택을 전제로 한다.
 
 ## 18.3 외부 AI 감사 로그
 
@@ -2079,7 +1956,7 @@ v1 Release Gate는 핵심 로컬 기능이 External API 없이 동작하는지 �
 - **Processing Queue가 완전히 비어 있어야 한다.** 여기서 Queue가 완전히 비어 있음은 §3.7과 동일하게 실행 중·일시중지·대기 Job이 모두 없는 상태를 의미한다.
 - **실행 중인 Maintenance Exclusive Operation이 없어야 한다.**
 
-미완료 Job이 존재하면 사용자는 해당 Job을 완료하거나 취소/Queue 제거한 뒤 업데이트를 진행해야 한다. 저장소 이전·백업·복원·전체 문서 데이터 삭제 등 Maintenance Exclusive Operation이 실행 중이면 해당 작업이 정상 종료되어 Maintenance 상태가 해제된 뒤 업데이트를 진행해야 한다.
+미완료 Job이 존재하면 사용자는 해당 Job을 완료하거나 취소/Queue 제거한 뒤 업데이트를 진행해야 한다. 저장소 이전·MYBOX 업로드·전체 문서 데이터 삭제 등 Maintenance Exclusive Operation이 실행 중이면 해당 작업이 정상 종료되어 Maintenance 상태가 해제된 뒤 업데이트를 진행해야 한다.
 
 앱은 종료 또는 업데이트 준비 과정에서 미완료 Job 또는 활성 Maintenance 작업이 있음을 명확히 안내해야 하며, 1차 제품은 버전 간 미완료 Processing Job의 Checkpoint/Queue 상태 호환을 보장하지 않는다.
 
@@ -2093,7 +1970,7 @@ v1 Release Gate는 핵심 로컬 기능이 External API 없이 동작하는지 �
 - 전처리 결과
 - 설정
 
-필요한 경우 재색인은 허용할 수 있으나 전체 문서 재등록, OCR 재실행, AI 전처리 재실행은 가능한 피한다.
+내부 검색 색인 재생성 API는 마이그레이션·복구용으로만 유지하며 사용자 설정 화면에서 제공하지 않는다. 전체 문서 재처리(파싱·OCR·AI·Embedding·색인 재실행)는 v1.3.0 검토 항목으로 명시적으로 연기한다.
 
 새 버전에서 저장소 또는 DB 구조 Migration이 필요한 경우 다음 원칙을 따른다.
 
@@ -2165,7 +2042,7 @@ Vector / Lexical 검색 인덱스.
 외부 AI 처리 감사 이력.
 
 ## BackupManifest
-백업 구성·암호화·검증·복원 상태와 Cross-PC 복구에 필요한 메타정보.
+MYBOX 백업 구성, 카탈로그 동기화 상태와 원본 Hash 검증에 필요한 메타정보.
 
 물리 DB Schema와 Entity 간 상세 관계는 TRD에서 정의한다.
 
@@ -2278,32 +2155,17 @@ Vector / Lexical 검색 인덱스.
 9. 새 저장소 전환과 시스템 경로 포인터 갱신 후 기존 Weki 관리 데이터 정리
 10. 기존 저장소에 사용자 파일이 남아 있으면 해당 파일과 폴더를 보존하고 결과를 사용자에게 안내
 
-## Scenario I — 로컬 검색 시스템 백업 복원
+## Scenario I — MYBOX 백업·카탈로그 동기화와 원본 지연 복원
 
 1. §3.7 조건에 따라 Processing Queue가 완전히 비어 있는지 확인
-2. Maintenance 상태 진입 후 신규 등록/재처리 Job 생성 차단
-3. 사용자가 암호화된 로컬 검색 시스템 백업 선택
-4. 전체 교체 경고 확인
-5. 복원
-6. 로컬 검색 시스템 백업으로 복원된 모든 Document를 `source_status = missing`으로 설정
-7. 복원 전 SourceBlob/원본 Archive는 자동 재사용·병합하지 않음
-8. 검색 데이터가 정상이라면 검색 계속 가능
-9. 백업된 Extracted/OCR Text와 Visual Evidence용 Visual Asset/미리보기가 정상이라면 Evidence 열람 계속 가능
-10. 동일 원본 확보 후 일반 등록 시 Hash 확인하여 자동 재연결
-11. 유효한 기존 전처리·Index 재사용
-12. 최초 등록 당시 Document 원본 수정일은 유지
-13. API Key가 필요한 경우 사용자가 다시 입력
+2. MYBOX 업로드를 실행해 검색 DB와 원본 Archive를 함께 보존
+3. 새 저장소의 빈 로컬 DB에서 `knowledge-base.json`을 동기화
+4. 검색은 동기화된 로컬 DB·임베딩으로 수행
+5. 원본이 없는 검색결과에서 `원본 열기`를 선택
+6. 필요한 MYBOX 원본만 다운로드하고 Hash 검증 후 현재 저장소에 캐시
+7. v1.2.0 로컬 `.weki` 파일은 자동 삭제되지 않으며 복원 대상으로 제공되지 않음
 
-## Scenario J — 로컬 전체 백업으로 다른 PC 복구
-
-1. 원본 PC를 사용할 수 없는 상황에서 새 지원 Windows PC 준비
-2. 암호화된 로컬 전체 백업 선택
-3. 백업 복호화 및 무결성 검증
-4. 전체 복원
-5. Document, 원본 Archive, 전처리 결과, 검색 인덱스, 일반 처리 로그, 외부 AI 감사 로그 복구
-6. API Key는 백업에 없으므로 필요 시 재입력
-
-## Scenario K — 전체 문서 데이터 삭제
+## Scenario J — 전체 문서 데이터 삭제
 
 1. §3.7 조건에 따라 Processing Queue가 완전히 비어 있는지 확인
 2. `전체 문서 데이터 삭제` 선택
@@ -2379,20 +2241,17 @@ Vector / Lexical 검색 인덱스.
 | REQ-SEC-LOCAL-001 | §18.2 | 원본 Archive와 주요 문서 내용 저장 DB에는 앱 수준 저장 데이터 보호가 적용되고, API Key 등 Credential은 별도 안전한 저장 방식을 사용한다. Index/Cache 예외는 Threat Model에서 명시된다. |
 | REQ-LOG-AUDIT-001 | §18.3~18.4 | External AI 감사 로그를 기록하고 로그는 자동 기간 삭제하지 않으며 사용자 직접 삭제가 가능하다. |
 
-## 24.5 Maintenance / 백업 / 복원
+## 24.5 Maintenance / MYBOX 백업과 지연 복원
 
 | Requirement ID | Source | Acceptance Condition |
 |---|---|---|
-| REQ-MAINT-EMPTY-001 | §3.7 | 저장소 이전/백업/복원/전체 문서 데이터 삭제는 실행·일시중지·대기 Job이 하나도 없을 때만 시작된다. |
+| REQ-MAINT-EMPTY-001 | §3.7 | 저장소 이전/MYBOX 업로드/전체 문서 데이터 삭제는 실행·일시중지·대기 Job이 하나도 없을 때만 시작된다. |
 | REQ-MIG-READ-001 | §15.2 | 저장소 이전 중 검색/열람/원본 열기는 가능하고 검색 피드백·암묵적 Signal Write는 기록되지 않는다. |
-| REQ-BACKUP-TYPE-001 | §16.1, §16.5 | 로컬 호환 백업 유형은 기존 검색 시스템/전체 백업 범위를 유지한다. v1 MYBOX 업로드는 검색 데이터와 원본 Archive를 함께 보존하지만, 검색 DB 동기화는 `knowledge-base.json`만 받고 원본은 지연 복원한다. |
-| REQ-BACKUP-KEY-001 | §16.1~16.3 | API Key는 모든 백업에서 제외된다. |
-| REQ-BACKUP-CRYPT-001 | §16.2, §16.5 | 로컬 호환 백업은 암호화하고, v1 MYBOX 백업은 원본 포함 평문 패키지임을 업로드 전에 명확히 경고한다. |
-| REQ-BACKUP-WRITE-001 | §16.2 | 백업 중 검색/열람은 가능하지만 백업 대상 데이터의 Write는 제한된다. |
-| REQ-BACKUP-MANUAL-001 | §16.2, §16.5 | 로컬 백업·복원과 MYBOX 업로드·검색 DB 동기화는 사용자가 버튼으로 명시적으로 실행한다. 단, 신규 빈 로컬 DB의 최초 MYBOX 검색 DB 동기화만 1회 자동 실행한다. |
-| REQ-RESTORE-001 | §16.3~16.4 | 복원은 전체 교체 방식이고 복원 중 검색/열람/원본 열기가 차단된다. 복원·검증이 모두 성공한 경우에만 새 상태로 전환하며 실패 시 기존 정상 데이터가 유지된다. |
-| REQ-RESTORE-SOURCE-001 | §16.4, §16.5 | 로컬 검색 시스템 백업 복원은 원본 누락 상태로 전체 교체하고, MYBOX는 검색 DB를 Hash 기준 병합하며 원본 열기 시 필요한 파일만 Hash 검증 후 재연결한다. |
-| REQ-CROSSPC-001 | §16.1~16.3 | 전체 백업은 원본 PC가 유실되어도 다른 지원 Windows PC에서 복원 가능하다. |
+| REQ-BACKUP-TYPE-001 | §16.1~16.2 | MYBOX가 유일한 지원 백업 경로다. MYBOX 업로드는 검색 데이터와 원본 Archive를 함께 보존하고, 검색 DB 동기화는 `knowledge-base.json`만 받으며 원본은 지연 복원한다. |
+| REQ-BACKUP-KEY-001 | §16.1~16.2 | API Key는 MYBOX 백업에 포함하지 않는다. |
+| REQ-BACKUP-MANUAL-001 | §16.2 | MYBOX 업로드와 검색 DB 동기화는 사용자가 버튼으로 명시적으로 실행한다. 단, 신규 빈 로컬 DB의 최초 MYBOX 검색 DB 동기화만 1회 자동 실행한다. |
+| REQ-BACKUP-WEKI-001 | §16.1~16.2 | v1.2.1은 v1.2.0의 로컬 `.weki` 백업을 생성·복원하지 않으며, 기존 `.weki` 파일을 자동 삭제하지 않는다. |
+| REQ-REPROCESS-BOUNDARY-001 | §16.3 | 사용자 설정 화면에 검색 색인 관리 UI를 제공하지 않으며, 전체 문서 재처리는 v1.3.0 검토 항목으로 연기한다. |
 | REQ-DEL-DOC-001 | §17.1 | 개별 Document 삭제 시 해당 Document의 검색·전처리 데이터가 제거되고, 미승인 자동 동의어·약어 후보는 Source 연계정책에 따라 삭제 또는 집계 갱신되며 사용자 승인·수정·직접 추가 사전은 유지된다. |
 | REQ-DEL-ALL-001 | §17.2 | 전체 문서 데이터 삭제는 Queue가 비어 있을 때만 시작되며 작업 중 검색·검색결과 열람·원본 열기가 차단된다. |
 
@@ -2537,19 +2396,10 @@ Vector / Lexical 검색 인덱스.
 
 ## 25.11 백업
 
-- 검색 시스템 백업 / 전체 백업 Package 범위
-- Package Format
-- Compression
-- Encryption
-- Cross-PC Key / Recovery Mechanism
-- Manifest
-- Integrity Verification
-- Backup Snapshot 방식
-- Visual Evidence용 Visual Asset/미리보기 보존 형식
-- 백업 중 읽기 허용 / Write 제한 Lock 정책
-- Restore Transaction
-- 검색 시스템 백업 복원 직후 전체 Document `source_status=missing` 적용 방식
-- Source Relink
+- MYBOX 카탈로그와 원본 Archive 업로드 범위
+- Hash 기반 카탈로그 병합과 원본 지연 복원
+- MYBOX 업로드 시 원본 포함·평문 경고
+- 기존 `.weki` 파일 비호환·비삭제 정책
 
 ## 25.12 앱 업데이트 Migration
 
@@ -2657,12 +2507,11 @@ Vector / Lexical 검색 인덱스.
 7. **신규 Document는 검색 가능 조건을 만족한 Knowledge Unit부터 순차 노출한다.** 기존 Document 재처리는 기존 검색결과와 기존 `Document.processing_status`를 유지한 상태에서 수행하고, 완료·검증 후 새 결과를 Commit한 경우에만 새 상태로 전환한다. 재처리 실행·실패 상태는 ProcessingJob에서 별도 관리한다.
 8. **1차 검색 범위는 전체 Knowledge Base다.** 특정 폴더·프로젝트·개별 문서로 검색범위를 고정하는 기능은 1차에 포함하지 않는다.
 9. **Document의 처리상태와 원본상태는 분리한다.** 전처리가 완료되었지만 원본이 누락된 상태에서도 파생데이터가 정상이라면 검색과 Evidence 열람을 유지한다.
-10. **저장소 이전·백업·복원·전체 문서 데이터 삭제는 공통 Maintenance Exclusive Operation 정책을 따른다.** 시작 전 Queue가 비어 있어야 하며 작업 중 신규 등록/재처리 Job 및 다른 Maintenance 작업 시작을 차단한다.
-11. **백업 유형별 범위를 구분한다.** 로컬 검색 시스템 백업은 원본 Archive를 제외하되 검색과 Evidence 복원에 필요한 Text/Visual 파생데이터를 포함하고 복원 직후 원본 누락으로 처리한다. 로컬 전체 백업은 원본 Archive와 일반 처리 로그·외부 AI 감사 로그까지 포함한다. v1 MYBOX 업로드는 검색 데이터와 원본 Archive를 함께 보존하되, 검색 DB 동기화 때는 JSON만 받고 원본은 필요 시 지연 복원하며 API Key는 모든 백업에서 제외한다.
-12. **암호화 정책을 백업 위치별로 명확히 한다.** 로컬 호환 백업은 암호화하고, 초기 v1 MYBOX 백업은 원본 포함 평문 패키지임을 업로드 전에 경고한다. 이 차이가 재설치·Cross-PC 복구 요구를 훼손하지 않도록 저장소 경로와 백업 형식을 검증한다.
+10. **저장소 이전·MYBOX 업로드·전체 문서 데이터 삭제는 공통 Maintenance Exclusive Operation 정책을 따른다.** 시작 전 Queue가 비어 있어야 하며 작업 중 신규 등록/재처리 Job 및 다른 Maintenance 작업 시작을 차단한다.
+11. **백업은 MYBOX만 지원한다.** MYBOX 업로드는 검색 데이터와 원본 Archive를 함께 보존하고, 검색 DB 동기화 때는 JSON만 받으며 원본은 필요 시 지연 복원한다. API Key는 MYBOX 백업에 포함하지 않는다. v1.2.0 로컬 `.weki` 파일은 생성·복원하지 않고 자동 삭제하지도 않는다.
+12. **검색 색인과 전체 문서 재처리의 경계를 명확히 한다.** 사용자 설정 화면에는 검색 색인 관리 UI를 제공하지 않는다. 내부 색인 재생성 API는 마이그레이션·복구용으로 유지하며, 전체 문서 재처리는 v1.3.0 검토 항목이다.
 13. **검색 품질의 핵심 Hit는 Document만이 아니라 Evidence 위치까지 맞아야 한다.** Golden Dataset은 Tuning Set과 Hold-out Release Evaluation Set으로 선분리하고 Evidence Top-5 중심의 동결된 Threshold를 출시 전에 충족한다.
 14. **비텍스트 Visual 의미 이해는 Best-effort지만 Evidence 정합성은 필수다.** Visual Analysis 실패 자체는 핵심 출시 실패가 아니지만, Visual을 직접 근거로 반환한 결과는 실제 Visual Evidence로 역추적되어야 한다.
-15. **복원은 기존 정상 데이터를 보호하는 전체 교체 작업이다.** 복원 중 검색·열람을 차단하고, 새 상태의 복원·검증이 성공한 경우에만 전환하며 실패 시 기존 정상 데이터를 유지한다.
 16. **부분 실패와 일시중지는 사용자에게 숨기지 않는다.** 필수 처리 일부 실패는 검색 가능한 단위가 있어도 `partial`로 표시하고, 사용자 또는 시스템 원인으로 일시중지된 Job은 사용자가 명시적으로 재개한다.
 17. **주요 민감 데이터에는 앱 수준 저장 데이터 보호를 적용한다.** API Key는 별도의 안전한 Credential 저장 방식을 사용하고 Index/Cache 등의 세부 예외는 Threat Model에서 관리한다.
 18. **수동 업데이트 전에는 Processing Queue가 완전히 비어 있고 실행 중인 Maintenance Exclusive Operation도 없어야 한다.** 1차 제품은 버전 간 미완료 Processing Job 상태 호환을 보장하지 않는다.
