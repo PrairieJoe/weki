@@ -8,9 +8,9 @@
 
 ## 검증
 
-- `npm test`: 193 passed / 6 failed / 0 skipped
-- 알려진 `test_data` fixture 누락: PDF/HWPX 관련 6건 실패. fixture는 추가하거나 복사하지 않았습니다. 제품·온보딩·상태 API 계약은 통과했습니다.
-- `npm run test:e2e`: 1 passed / 1 failed / 0 skipped. fixture-free 온보딩 E2E는 통과했고, 기존 PDF fixture E2E는 fixture가 없어 Electron 실행 전에 실패했습니다.
+- `npm test`: 199 passed / 0 failed / 0 skipped
+- `npm run test:e2e`: 2 passed / 0 failed / 0 skipped. 기존 PDF 처리 E2E와 fixture-free 온보딩 E2E를 모두 통과했습니다.
+- 검증에는 저장소에서 제외된 기존 `test_data` PDF/HWPX fixture를 사용했으며, 개인정보·대용량 원본 보호를 위해 fixture 자체는 릴리즈와 커밋에 포함하지 않았습니다.
 - `node --test test/onboarding-e2e.test.mjs`: 1 passed / 0 failed
 - `node --test test/status-api.test.mjs`: 12 passed / 0 failed
 - `npm run build`: 통과

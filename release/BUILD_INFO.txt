@@ -1,4 +1,4 @@
-Source state: clean HEAD at d681922
+Application source commit: d681922
 Build date/time: 2026-09-10 15:50:16 +09:00
 Application version: 1.2.1
 Installer file name: Weki-1.2.1-Setup.exe
@@ -6,11 +6,10 @@ Installer size: 232100641 bytes
 Installer path: release/Weki-1.2.1-Setup.exe
 Installer SHA-256: 367EFB0F26A4A854497DFF5580D70160C90EF93B603F5F8F816379595557B690
 Installer SHA-512: A4470F59B1313A45D3A6B7B6A57819B97D74384F3CDF2F2EA088E4C0A22FC8BAE45B3C7BDC729DE43038C191336031649659441041592E560CE3AF6A316DD065
-npm test: 193 passed, 6 failed, 0 skipped
-Known missing test_data fixture failures: 6 (PDF/HWPX fixture files absent; no fixtures added)
-Non-fixture test failures: 0 (status-api Windows SQLite cleanup race fixed; onboarding contracts pass)
-npm run test:e2e: 1 passed, 1 failed, 0 skipped (fixture-free onboarding passed; existing PDF fixture test could not start)
+npm test: 199 passed, 0 failed, 0 skipped (using existing ignored PDF/HWPX test_data fixtures)
+npm run test:e2e: 2 passed, 0 failed, 0 skipped (legacy PDF flow and fixture-free onboarding passed)
+Test fixture policy: test_data fixtures remain ignored and are not included in the release artifact or commits
 npm run build: PASS
 npm run dist:win: PASS
 Packaging check: PASS (packaged version 1.2.1; app.asar contains onboarding controller, replay hook and fallback CSS)
-Release status: v1.2.1 ARTIFACT VERIFIED; TEST SUITE LIMITED BY 6 MISSING-FIXTURE FAILURES
+Release status: v1.2.1 ARTIFACT VERIFIED; FULL LOCAL TEST SUITE GREEN WITH PROVIDED FIXTURES
