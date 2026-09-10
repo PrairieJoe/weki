@@ -279,7 +279,8 @@ test("Weki exposes a replayable five-step onboarding tour", () => {
   assert.match(onboarding, /다음/);
   assert.match(main, /사용 가이드/);
   assert.match(styles, /--onboarding-scrim:\s*rgba\(24,\s*28,\s*32,\s*0\.42\)/);
-  assert.match(styles, /\.onboarding-scrim\{background:var\(--onboarding-scrim\)/);
+  assert.match(styles, /\.onboarding-scrim\{[^}]*background:var\(--onboarding-scrim\)/);
+  assert.doesNotMatch(styles, /rgba\(8,\s*12,\s*58/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
