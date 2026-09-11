@@ -55,6 +55,7 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(Object.keys(schema.properties.visualDescriptions.items.properties), ["assetName", "description"]);
   assert.equal(schema.properties.visualDescriptions.items.additionalProperties, false);
+  assert.doesNotMatch(JSON.stringify(schema), /maxLength/);
   for (const request of requests) {
     assert.doesNotMatch(JSON.stringify(request.options.headers ?? {}), /secret-api-key/i);
     assert.doesNotMatch(JSON.stringify(request.body ?? {}), /secret-api-key/i);

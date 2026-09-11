@@ -16,17 +16,17 @@ const GEMINI_ENRICH_INSTRUCTION = "Return JSON with exactly these fields: summar
 export const GEMINI_RESPONSE_SCHEMA = Object.freeze({
   type: "OBJECT",
   properties: {
-    summary: { type: "STRING", maxLength: GEMINI_MAX_SUMMARY_CHARS },
-    topic: { type: "STRING", maxLength: GEMINI_MAX_TOPIC_CHARS },
-    keywords: { type: "ARRAY", maxItems: GEMINI_MAX_KEYWORDS, items: { type: "STRING", maxLength: GEMINI_MAX_KEYWORD_CHARS } },
+    summary: { type: "STRING" },
+    topic: { type: "STRING" },
+    keywords: { type: "ARRAY", maxItems: GEMINI_MAX_KEYWORDS, items: { type: "STRING" } },
     visualDescriptions: {
       type: "ARRAY",
       maxItems: GEMINI_MAX_IMAGES,
       items: {
         type: "OBJECT",
         properties: {
-          assetName: { type: "STRING", maxLength: GEMINI_MAX_ASSET_NAME_CHARS },
-          description: { type: "STRING", maxLength: GEMINI_MAX_VISUAL_DESCRIPTION_CHARS },
+          assetName: { type: "STRING" },
+          description: { type: "STRING" },
         },
         required: ["assetName", "description"],
         additionalProperties: false,
