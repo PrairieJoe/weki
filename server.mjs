@@ -173,16 +173,27 @@ class JobInterrupted extends Error {
 }
 const semanticProcessingEnabled = () => Boolean(embeddingProvider?.available);
 const processingModeResolution = (mode) => {
-  if (mode && typeof mode === "object" && mode.effectiveMode) return {
-    requestedMode: mode.requestedMode || mode.requestedProcessingMode || mode.mode || "lightweight",
-    effectiveMode: mode.effectiveMode,
-    fallbackReason: mode.fallbackReason ?? mode.processingModeFallback ?? null,
-    provider: mode.provider ?? mode.externalProvider ?? null,
-    modelId: mode.modelId ?? mode.externalModelId ?? null,
+  if (mode && typeof mode === "object") {
+    if (mode.processingPolicy && typeof mode.processingPolicy === "object") return processingModeResolution(mode.processingPolicy);
+    if (mode.effectiveMode) return {
+      requestedMode: PROCESSING_DEFAULT_MODES.has(mode.requestedMode || mode.requestedProcessingMode || mode.mode) ? (mode.requestedMode || mode.requestedProcessingMode || mode.mode) : "lightweight",
+      effectiveMode: PROCESSING_DEFAULT_MODES.has(mode.effectiveMode) ? mode.effectiveMode : "lightweight",
+      fallbackReason: mode.fallbackReason ?? mode.processingModeFallback ?? null,
+      provider: mode.provider ?? mode.externalProvider ?? null,
+      modelId: mode.modelId ?? mode.externalModelId ?? null,
+    };
+    return processingModeResolution(typeof mode.mode === "string" ? mode.mode : "lightweight");
+  }
+  const requestedMode = PROCESSING_DEFAULT_MODES.has(mode) ? mode : (typeof mode === "string" ? normalizeDefaultProcessingMode(mode) : "lightweight");
+  if (requestedMode === "local-ai" && !semanticProcessingEnabled()) return { requestedMode, effectiveMode: "lightweight", fallbackReason: "semantic_model_unavailable", provider: null, modelId: null };
+  if (requestedMode === "auto") return { requestedMode, effectiveMode: semanticProcessingEnabled() ? "local-ai" : "lightweight", fallbackReason: semanticProcessingEnabled() ? null : "runtime_components_incomplete", provider: null, modelId: null };
+  return {
+    requestedMode,
+    effectiveMode: requestedMode,
+    fallbackReason: null,
+    provider: null,
+    modelId: null,
   };
-  const requestedMode = mode === "local-ai" ? "local-ai" : "lightweight";
-  if (requestedMode === "local-ai" && !semanticProcessingEnabled()) return { requestedMode, effectiveMode: "lightweight", fallbackReason: "semantic_model_unavailable" };
-  return { requestedMode, effectiveMode: requestedMode, fallbackReason: null };
 };
 const jobProcessingResolution = (job) => processingModeResolution(job?.processingPolicy || job);
 const effectiveProcessingMode = (mode) => processingModeResolution(mode).effectiveMode;
@@ -190,9 +201,9 @@ const processingDetail = (mode, stage, completed = null, total = null) => {
   const resolution = processingModeResolution(mode);
   const effective = resolution.effectiveMode;
   const fallback = resolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. " : "";
-  if (stage === "index") return `${fallback}${effective === "local-ai" ? "Local AI: E5 의미 임베딩과 Evidence 색인을 생성 중입니다." : "경량 처리: Evidence 색인을 생성 중입니다."}`;
-  if (Number.isFinite(completed) && Number.isFinite(total)) return `${fallback}${effective === "local-ai" ? "Local AI" : "경량 처리"} · ${completed}/${total} 페이지·슬라이드 처리 완료`;
-  return `${fallback}${effective === "local-ai" ? "Local AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : "경량 처리: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다."}`;
+  if (stage === "index") return `${fallback}${effective === "local-ai" ? "Local AI: E5 의미 임베딩과 Evidence 색인을 생성 중입니다." : effective === "external-ai" ? "External AI: 페이지별 검색 보강과 Evidence 색인을 생성 중입니다." : "경량 처리: Evidence 색인을 생성 중입니다."}`;
+  if (Number.isFinite(completed) && Number.isFinite(total)) return `${fallback}${effective === "local-ai" ? "Local AI" : effective === "external-ai" ? "External AI" : "경량 처리"} · ${completed}/${total} 페이지·슬라이드 처리 완료`;
+  return `${fallback}${effective === "local-ai" ? "Local AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : effective === "external-ai" ? "External AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : "경량 처리: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다."}`;
 };
 async function checkpoint(jobId, completed, total, mode = "lightweight") {
   const db = await readDb(); const job = db.jobs.find((item) => item.id === jobId);
@@ -393,7 +404,7 @@ async function runQueue() {
        const doc = db.documents.find((item) => item.id === job.documentId);
        let originalPath;
        try { originalPath = await ensureDocumentOriginal(doc); } catch (error) { job.status = "failed"; job.detail = error.message || "원본이 없어 재처리할 수 없습니다."; await writeDb(db); continue; }
-      const modeResolution = jobProcessingResolution(job); job.status = "processing"; job.progress = 20; job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; job.detail = modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : job.effectiveMode === "local-ai" ? "Local AI: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : "경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다."; await writeDb(db);
+      const modeResolution = jobProcessingResolution(job); job.status = "processing"; job.progress = 20; job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; job.detail = modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : processingDetail(modeResolution, "extract"); await writeDb(db);
       try {
         const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
         const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); const freshDoc = fresh.documents.find((item) => item.id === job.documentId);
@@ -830,7 +841,14 @@ const SAFE_EXTERNAL_ERROR_CODES = new Set([
   "external_ai_timeout",
   "external_ai_invalid_response",
 ]);
-const externalApiKey = String(process.env.WEKI_GEMINI_API_KEY || "").trim();
+let externalApiKey = String(process.env.WEKI_GEMINI_API_KEY || "").trim();
+if (typeof process.on === "function") {
+  process.on("message", (message) => {
+    if (!message || message.type !== "weki:gemini-credential") return;
+    if (message.apiKey !== null && typeof message.apiKey !== "string") return;
+    externalApiKey = String(message.apiKey || "").trim();
+  });
+}
 const externalProviderBaseUrl = process.env.WEKI_GEMINI_API_BASE_URL || process.env.WEKI_GEMINI_API_BASE || undefined;
 const externalProviderTimeoutMs = Number(process.env.WEKI_GEMINI_TIMEOUT_MS) || 30_000;
 const safeExternalErrorCode = (error) => SAFE_EXTERNAL_ERROR_CODES.has(error?.code) ? error.code : "external_ai_provider_error";
@@ -1406,6 +1424,8 @@ app.post("/api/documents", upload.array("files"), async (req, res) => {
     externalFailureReason: external.failureReason,
   });
   const processingPolicy = { requestedMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: modeResolution.fallbackReason };
+  const consentVersion = Number(req.body?.consentVersion ?? (typeof req.body?.externalAi === "object" ? req.body.externalAi?.consentVersion : null));
+  if (hasExplicitMode && requestedMode === "external-ai" && consentVersion !== 1) return res.status(409).json({ error: "external_ai_consent_required", code: "external_ai_consent_required" });
   if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서 등록을 시작할 수 없습니다." }); const results = [];
   for (const file of req.files || []) {
     const fileName = normalizeFilename(file.originalname); const ext = path.extname(fileName).slice(1).toLowerCase();

@@ -26,18 +26,25 @@ function parseRecord(raw) {
 export function createAiCredentialsStore({ filePath, safeStorage, fsImpl = fs, provider: requestedProvider = provider }) {
   if (requestedProvider !== provider) throw new Error("Only the Gemini credential provider is supported.");
 
-  async function getStatus() {
-    const available = encryptionAvailable(safeStorage);
-    if (!available) return { provider, configured: false, encryptionAvailable: false };
+  async function readApiKey() {
+    if (!encryptionAvailable(safeStorage)) return null;
     try {
       const record = parseRecord(await fsImpl.readFile(filePath, "utf8"));
       const apiKey = String(safeStorage.decryptString(Buffer.from(record.ciphertext, "base64")) || "").trim();
-      return { provider, configured: Boolean(apiKey), encryptionAvailable: true };
-    } catch (error) {
-      if (error?.code === "ENOENT") return { provider, configured: false, encryptionAvailable: true };
-      return { provider, configured: false, encryptionAvailable: true };
+      return apiKey || null;
+    } catch {
+      return null;
     }
   }
+
+  async function getStatus() {
+    const available = encryptionAvailable(safeStorage);
+    if (!available) return { provider, configured: false, encryptionAvailable: false };
+    return { provider, configured: Boolean(await readApiKey()), encryptionAvailable: true };
+  }
+
+  // Main-process-only boundary: the renderer and HTTP APIs never call or receive this value.
+  async function getApiKeyForServer() { return readApiKey(); }
 
   async function saveApiKey(apiKey) {
     const normalizedApiKey = String(apiKey || "").trim();
@@ -61,7 +68,7 @@ export function createAiCredentialsStore({ filePath, safeStorage, fsImpl = fs, p
     return { provider, configured: false };
   }
 
-  return { saveApiKey, clearApiKey, getStatus };
+  return { saveApiKey, clearApiKey, getStatus, getApiKeyForServer };
 }
 
 function safeReply(encryptionAvailable, configured) {
