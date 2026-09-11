@@ -291,7 +291,7 @@ test("Weki keeps onboarding copy read-only and exposes the compatibility screen 
 });
 
 test("Weki separates installed-model and external-AI defaults from per-document processing choices", () => {
-  const defaultStart = main.indexOf("function syncProcessingDefaultControls");
+  const defaultStart = main.indexOf("function syncDefaultProcessingMode");
   const defaultEnd = main.indexOf("function runtimeInstallMetadata", defaultStart);
   const defaultControl = defaultStart >= 0 && defaultEnd >= 0 ? main.slice(defaultStart, defaultEnd) : "";
   const defaultChoices = [...defaultControl.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
