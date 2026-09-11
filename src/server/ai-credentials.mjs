@@ -4,6 +4,7 @@ import path from "node:path";
 
 const provider = "gemini";
 const credentialKeys = ["ciphertext", "format", "provider", "version"];
+const sortedCredentialKeys = credentialKeys.slice().sort();
 
 function credentialError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -16,7 +17,7 @@ function encryptionAvailable(safeStorage) {
 function parseRecord(raw) {
   const record = JSON.parse(raw);
   const keys = record && typeof record === "object" && !Array.isArray(record) ? Object.keys(record).sort() : [];
-  if (keys.length !== credentialKeys.length || keys.some((key, index) => key !== credentialKeys.slice().sort()[index]) || record?.format !== "weki-credential" || record.provider !== provider || record.version !== 1 || typeof record.ciphertext !== "string" || !record.ciphertext) {
+  if (keys.length !== sortedCredentialKeys.length || keys.some((key, index) => key !== sortedCredentialKeys[index]) || record?.format !== "weki-credential" || record.provider !== provider || record.version !== 1 || typeof record.ciphertext !== "string" || !record.ciphertext) {
     throw credentialError("CREDENTIAL_UNREADABLE", "Gemini credential format is invalid.");
   }
   return record;
@@ -101,4 +102,26 @@ export function createAiCredentialIpcHandlers({ getStore, encryptionAvailable, r
       }
     },
   };
+}
+
+export function waitForLocalServerReady(child) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.removeListener("message", onMessage);
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+    };
+    const finish = (error) => {
+      cleanup();
+      if (error) reject(error); else resolve();
+    };
+    const onMessage = (message) => {
+      if (message?.type === "weki-server-ready") finish();
+    };
+    const onError = (error) => finish(error);
+    const onExit = (code, signal) => finish(Object.assign(new Error("Local Weki server exited before readiness."), { code, signal }));
+    child.on("message", onMessage);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
 }

@@ -1332,6 +1332,7 @@ process.once("SIGTERM", () => { closeRuntimeStores(); process.exit(0); });
 process.once("SIGINT", () => { closeRuntimeStores(); process.exit(0); });
 app.listen(port, "127.0.0.1", () => {
   console.log(`Weki is running at http://127.0.0.1:${port}`);
+  try { if (typeof process.send === "function") process.send({ type: "weki-server-ready" }); } catch {}
   void runQueue();
   if (process.env.WEKI_DISABLE_INITIAL_MYBOX_SYNC !== "1" && shouldRunInitialMyboxSync({ newlyCreated: initialStoreCreated, documentCount: 0, hasToken: Boolean(process.env.NAVER_MBOX_TOKEN) })) void runMyboxCatalogSync({ initial: true }).catch(() => {});
 });

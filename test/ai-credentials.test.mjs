@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createAiCredentialIpcHandlers, createAiCredentialsStore } from "../src/server/ai-credentials.mjs";
+import { createAiCredentialIpcHandlers, createAiCredentialsStore, waitForLocalServerReady } from "../src/server/ai-credentials.mjs";
 
 async function temporaryFile(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "weki-ai-credentials-"));
@@ -107,25 +108,30 @@ test("Gemini IPC save and clear use a local reload and expose only safe booleans
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
   let reloadCalls = 0;
   let networkCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (...args) => { networkCalls += 1; return originalFetch(...args); };
   const handlers = createAiCredentialIpcHandlers({
     getStore: async () => store,
     encryptionAvailable: () => true,
     reloadServer: async () => { reloadCalls += 1; },
-    networkRequest: () => { networkCalls += 1; },
   });
 
-  const saved = await handlers.save("AIza-local-only");
-  const status = await handlers.status();
-  const cleared = await handlers.clear();
+  try {
+    const saved = await handlers.save("AIza-local-only");
+    const status = await handlers.status();
+    const cleared = await handlers.clear();
 
-  assert.deepEqual(Object.keys(saved).sort(), ["configured", "encryptionAvailable"]);
-  assert.deepEqual(saved, { configured: true, encryptionAvailable: true });
-  assert.deepEqual(Object.keys(status).sort(), ["configured", "encryptionAvailable"]);
-  assert.deepEqual(status, { configured: true, encryptionAvailable: true });
-  assert.deepEqual(Object.keys(cleared).sort(), ["configured", "encryptionAvailable"]);
-  assert.deepEqual(cleared, { configured: false, encryptionAvailable: true });
-  assert.equal(reloadCalls, 2);
-  assert.equal(networkCalls, 0, "saving and clearing credentials must not call the network");
+    assert.deepEqual(Object.keys(saved).sort(), ["configured", "encryptionAvailable"]);
+    assert.deepEqual(saved, { configured: true, encryptionAvailable: true });
+    assert.deepEqual(Object.keys(status).sort(), ["configured", "encryptionAvailable"]);
+    assert.deepEqual(status, { configured: true, encryptionAvailable: true });
+    assert.deepEqual(Object.keys(cleared).sort(), ["configured", "encryptionAvailable"]);
+    assert.deepEqual(cleared, { configured: false, encryptionAvailable: true });
+    assert.equal(reloadCalls, 2);
+    assert.equal(networkCalls, 0, "saving and clearing credentials must not call global fetch");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("Gemini IPC keeps configured true when local reload fails after saving", async (t) => {
@@ -141,4 +147,19 @@ test("Gemini IPC keeps configured true when local reload fails after saving", as
 
   assert.deepEqual(result, { configured: true, encryptionAvailable: true });
   assert.equal((await store.getStatus()).configured, true);
+});
+
+test("local server readiness waits for a child ready message without an HTTP request", async () => {
+  const child = new EventEmitter();
+  let resolved = false;
+  const readiness = waitForLocalServerReady(child).then(() => { resolved = true; });
+
+  await Promise.resolve();
+  assert.equal(resolved, false);
+  child.emit("message", { type: "unrelated" });
+  await Promise.resolve();
+  assert.equal(resolved, false);
+  child.emit("message", { type: "weki-server-ready" });
+  await readiness;
+  assert.equal(resolved, true);
 });

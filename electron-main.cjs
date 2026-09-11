@@ -179,7 +179,9 @@ const reloadOwnedServer = async () => {
       setTimeout(finish, 2000);
     });
   }
-  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: 'ignore', windowsHide: true });
+  const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
+  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
+  await waitForLocalServerReady(server);
   return true;
 };
 const getAiCredentialHandlers = async () => {
