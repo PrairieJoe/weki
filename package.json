@@ -16,7 +16,8 @@
     "preview": "vite preview",
     "desktop": "electron .",
     "generate:icon": "node scripts/generate-icon.mjs",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis",
+    "release:metadata": "node scripts/generate-release-metadata.mjs"
   },
   "build": {
     "appId": "com.weki.desktop",

@@ -62,11 +62,13 @@ async function docxFixture(text = "external enrichment fixture") {
 }
 
 test("AI status exposes provider state without credential material", async (t) => {
-  const server = await startServer(t, { WEKI_GEMINI_API_KEY: "AIza-settings-contract-secret" });
+  const environmentFixture = "environment-fixture-must-be-ignored";
+  const server = await startServer(t, { WEKI_GEMINI_API_KEY: environmentFixture });
   const result = await json(await fetch(`http://127.0.0.1:${server.port}/api/status`));
   assert.equal(result.response.status, 200);
-  assert.doesNotMatch(JSON.stringify(result.body), /AIza-settings-contract-secret/);
+  assert.doesNotMatch(JSON.stringify(result.body), new RegExp(environmentFixture));
   assert.equal(result.body.processing.externalAi.provider, "gemini");
+  assert.equal(result.body.processing.externalAi.configured, false);
   assert.equal(result.body.processing.externalAi.enabled, false);
 });
 
@@ -91,17 +93,17 @@ test("preference saving is allowed before key/model setup but reports not-ready"
 });
 
 test("model and connection routes omit raw provider responses and document bodies", async (t) => {
-  const secret = "AIza-provider-response-secret";
+  const credentialFixture = "fixture-gemini-provider";
   let checkBody = "";
   let providerReceivedConfiguredKey = false;
   const provider = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
-      providerReceivedConfiguredKey ||= new URL(`http://provider${req.url}`).searchParams.get("key") === secret;
+      providerReceivedConfiguredKey ||= new URL(`http://provider${req.url}`).searchParams.get("key") === credentialFixture;
       res.setHeader("content-type", "application/json");
-      if (req.url.startsWith("/v1beta/models/") && req.url.includes(":generateContent")) { checkBody = body; return res.end(JSON.stringify({ secret, candidates: [{ content: { parts: [{ text: "ping response" }] } }] })); }
-      if (req.url.startsWith("/v1beta/models")) return res.end(JSON.stringify({ secret, models: [{ name: "models/gemini-test", displayName: "Test", supportedGenerationMethods: ["generateContent"] }] }));
+      if (req.url.startsWith("/v1beta/models/") && req.url.includes(":generateContent")) { checkBody = body; return res.end(JSON.stringify({ providerDiagnostic: "provider-only", candidates: [{ content: { parts: [{ text: "ping response" }] } }] })); }
+      if (req.url.startsWith("/v1beta/models")) return res.end(JSON.stringify({ providerDiagnostic: "provider-only", models: [{ name: "models/gemini-test", displayName: "Test", supportedGenerationMethods: ["generateContent"] }] }));
       res.statusCode = 404; return res.end("{}");
     });
   });
@@ -109,7 +111,7 @@ test("model and connection routes omit raw provider responses and document bodie
   const server = await startServer(t, { WEKI_GEMINI_API_BASE: `http://127.0.0.1:${provider.address().port}/v1beta` }, null, { useIpc: true });
   t.after(async () => { await new Promise((resolve) => provider.close(resolve)); });
   const credentialStore = createAiCredentialsStore({ filePath: path.join(server.dataDir, "credentials", "gemini-api-key.json"), safeStorage: testSafeStorage });
-  await credentialStore.saveApiKey(secret);
+  await credentialStore.saveApiKey(credentialFixture);
   await sendStoredCredential(server.child, await credentialStore.getApiKeyForServer());
   const patch = await json(await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "external-ai", externalAi: { modelId: "gemini-test", consentVersion: 1 } }) }));
   assert.equal(patch.response.status, 200);
@@ -121,11 +123,11 @@ test("model and connection routes omit raw provider responses and document bodie
   assert.equal(providerReceivedConfiguredKey, true);
   assert.match(checkBody, /"ping"/);
   assert.doesNotMatch(checkBody, /must not be sent/);
-  assert.doesNotMatch(JSON.stringify({ patch: patch.body, models: models.body, check: check.body }), /AIza-provider-response-secret|ping response/);
+  assert.doesNotMatch(JSON.stringify({ patch: patch.body, models: models.body, check: check.body }), /fixture-gemini-provider|ping response/);
 });
 
 test("credential reload clears a persisted external connection status without exposing the key", async (t) => {
-  const secret = "AIza-credential-reload-secret";
+  const credentialFixture = "fixture-gemini-reload";
   const server = await startServer(t, {}, {
     settings: {
       defaultProcessingMode: "external-ai",
@@ -138,7 +140,7 @@ test("credential reload clears a persisted external connection status without ex
     documents: [], jobs: [], audit: [],
   }, { useIpc: true });
   const credentialStore = createAiCredentialsStore({ filePath: path.join(server.dataDir, "credentials", "gemini-api-key.json"), safeStorage: testSafeStorage });
-  await credentialStore.saveApiKey(secret);
+  await credentialStore.saveApiKey(credentialFixture);
   await sendStoredCredential(server.child, await credentialStore.getApiKeyForServer());
 
   const result = await json(await fetch(`http://127.0.0.1:${server.port}/api/settings`));
@@ -147,10 +149,10 @@ test("credential reload clears a persisted external connection status without ex
   assert.equal(result.body.externalAi.ready, false);
   assert.equal(result.body.externalAi.lastConnection.status, "unknown");
   assert.equal(result.body.settings.externalAi.lastConnection.status, "unknown");
-  assert.doesNotMatch(JSON.stringify(result.body), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(result.body), new RegExp(credentialFixture));
   const stored = JSON.parse(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"));
   assert.equal(stored.settings.externalAi.lastConnection.status, "unknown");
-  assert.doesNotMatch(JSON.stringify(stored), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(stored), new RegExp(credentialFixture));
 });
 
 test("legacy queued jobs execute from mode when no processing policy snapshot exists", async (t) => {
@@ -229,9 +231,8 @@ test("global external AI OFF rejects new explicit registration before provider u
     res.end(JSON.stringify({ error: "provider must not be called while external AI is OFF" }));
   });
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
-  const secret = "AIza-external-off-policy-secret";
+  const credentialFixture = "fixture-gemini-off-policy";
   const server = await startServer(t, {
-    WEKI_GEMINI_API_KEY: secret,
     WEKI_GEMINI_API_BASE: `http://127.0.0.1:${provider.address().port}/v1beta`,
   }, {
     settings: {
@@ -243,13 +244,17 @@ test("global external AI OFF rejects new explicit registration before provider u
       },
     },
     documents: [], jobs: [], audit: [],
-  });
+  }, { useIpc: true });
   t.after(async () => { await new Promise((resolve) => provider.close(resolve)); });
+  const credentialStore = createAiCredentialsStore({ filePath: path.join(server.dataDir, "credentials", "gemini-api-key.json"), safeStorage: testSafeStorage });
+  await credentialStore.saveApiKey(credentialFixture);
+  await sendStoredCredential(server.child, await credentialStore.getApiKeyForServer());
 
   const status = await json(await fetch(`http://127.0.0.1:${server.port}/api/status`));
   assert.equal(status.body.processing.externalAi.enabled, false);
   assert.equal(status.body.processing.externalAi.ready, false);
-  assert.doesNotMatch(JSON.stringify(status.body), new RegExp(secret));
+  assert.equal(status.body.processing.externalAi.configured, true);
+  assert.doesNotMatch(JSON.stringify(status.body), new RegExp(credentialFixture));
 
   const form = new FormData();
   form.append("mode", "external-ai");
@@ -262,6 +267,30 @@ test("global external AI OFF rejects new explicit registration before provider u
   assert.equal(providerCalls, 0);
   const stored = JSON.parse(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"));
   assert.deepEqual(stored.jobs, []);
+});
+
+test("global external AI OFF rejects explicit reprocess without changing existing snapshots", async (t) => {
+  const bytes = await docxFixture("external reprocess must stay local");
+  const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+  const name = "external-off-reprocess.docx";
+  const snapshot = { requestedMode: "external-ai", effectiveMode: "external-ai", provider: "gemini", modelId: "gemini-test", fallbackReason: null };
+  const server = await startServer(t, {}, {
+    settings: { defaultProcessingMode: "auto", externalAi: { modelId: "gemini-test", consentVersion: 1, lastConnection: { status: "ready", checkedAt: "2026-09-11T00:00:00.000Z", errorCode: null } } },
+    documents: [{ id: "external-off-reprocess-document", name, originalName: name, format: "DOCX", hash, originalKey: `${hash}/${name}`, sourceStatus: "local_available", processingStatus: "completed", units: [{ id: "existing-unit", range: 1, text: "existing evidence" }] }],
+    jobs: [{ id: "existing-external-snapshot", kind: "reprocess", name, documentId: "external-off-reprocess-document", mode: "external-ai", processingPolicy: snapshot, status: "paused", progress: 25, createdAt: "2026-09-11T00:00:00.000Z" }],
+    audit: [],
+  }, { initialFiles: [[`originals/${hash}/${name}`, bytes]] });
+
+  const result = await json(await fetch(`http://127.0.0.1:${server.port}/api/documents/external-off-reprocess-document/reprocess`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "external-ai" }),
+  }));
+
+  assert.equal(result.response.status, 409);
+  assert.equal(result.body.code, "external_ai_disabled");
+  const stored = JSON.parse(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"));
+  assert.deepEqual(stored.jobs, [{ id: "existing-external-snapshot", kind: "reprocess", name, documentId: "external-off-reprocess-document", mode: "external-ai", processingPolicy: snapshot, status: "paused", progress: 25, createdAt: "2026-09-11T00:00:00.000Z" }]);
 });
 
 async function waitForDatabase(dataDir, predicate, timeoutMs = 15_000, intervalMs = 100) {
@@ -277,7 +306,7 @@ async function waitForDatabase(dataDir, predicate, timeoutMs = 15_000, intervalM
 }
 
 test("external registration snapshots policy across settings OFF and records enrichment fallback audit", async (t) => {
-  const secret = "AIza-external-registration-secret";
+  const credentialFixture = "fixture-gemini-registration";
   let failEnrichment = false;
   const provider = createServer((req, res) => {
     let body = "";
@@ -297,7 +326,7 @@ test("external registration snapshots policy across settings OFF and records enr
   const server = await startServer(t, { WEKI_GEMINI_API_BASE: `http://127.0.0.1:${provider.address().port}/v1beta` }, null, { useIpc: true });
   t.after(async () => { await new Promise((resolve) => provider.close(resolve)); });
   const credentialStore = createAiCredentialsStore({ filePath: path.join(server.dataDir, "credentials", "gemini-api-key.json"), safeStorage: testSafeStorage });
-  await credentialStore.saveApiKey(secret);
+  await credentialStore.saveApiKey(credentialFixture);
   await sendStoredCredential(server.child, await credentialStore.getApiKeyForServer());
   const setExternal = () => fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "external-ai", externalAi: { modelId: "gemini-test", consentVersion: 1 } }) });
   assert.equal((await setExternal()).status, 200);
@@ -336,5 +365,5 @@ test("external registration snapshots policy across settings OFF and records enr
   assert.equal(secondDocument.processingMode, "lightweight");
   assert.equal(secondDocument.processingModeFallback, "external_ai_provider_error");
   assert.ok(afterSecond.audit.some((entry) => entry.type === "external-ai" && entry.status === "failed" && entry.errorCode === "external_ai_provider_error"));
-  assert.doesNotMatch(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"), new RegExp(secret));
+  assert.doesNotMatch(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"), new RegExp(credentialFixture));
 });

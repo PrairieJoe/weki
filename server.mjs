@@ -29,7 +29,7 @@ import { createSemanticEngine } from "./src/search/semantic-engine.mjs";
 import { createAnnIndex } from "./src/search/ann-index.mjs";
 import { buildEvidenceFragments } from "./src/processing/evidence.mjs";
 import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
-import { collectZipVisualAssets } from "./src/processing/visual-assets.mjs";
+import { collectZipVisualAssets, splitDocxLogicalPages } from "./src/processing/visual-assets.mjs";
 import { buildVisualContext } from "./src/processing/visual-context.mjs";
 import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
 import { enrichPagesForSearch, stripEphemeralImageData } from "./src/server/ai-processing.mjs";
@@ -247,9 +247,21 @@ async function extractZip(buffer, ext, options = {}) {
   let paths;
   if (ext === "pptx") paths = files.filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p)).sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
   else if (ext === "docx") paths = files.filter((p) => p === "word/document.xml");
-  else paths = files.filter((p) => /(?:Contents|section)\/.*\.xml$|^Contents\/content\.xml$/i.test(p));
+  else paths = files.filter((p) => /(?:Contents|section)\/.*\.xml$|^Contents\/content\.xml$/i.test(p)).sort((a, b) => a.localeCompare(b));
   const slideOcr = new Map();
   const slideAssets = new Map();
+  let pageSources = null;
+  let pageCount = paths.length;
+  if (ext === "docx") {
+    const sourcePath = paths[0];
+    const xml = sourcePath ? await zip.file(sourcePath).async("string") : "";
+    pageSources = sourcePath ? splitDocxLogicalPages(xml).map((pageXml) => ({ sourcePath, xml: pageXml })) : [];
+    pageCount = pageSources.length;
+  } else if (ext === "hwpx") {
+    pageSources = [];
+    for (const sourcePath of paths) pageSources.push({ sourcePath, xml: await zip.file(sourcePath).async("string") });
+    pageCount = pageSources.length;
+  }
   if (ext === "pptx") {
     const worker = await createLocalOcrWorker();
     try {
@@ -278,14 +290,35 @@ async function extractZip(buffer, ext, options = {}) {
   if (["docx", "hwpx"].includes(ext)) {
     const worker = await createLocalOcrWorker();
     try {
-      const assets = await collectZipVisualAssets(zip, ext, { recognize: async (bytes) => (await worker.recognize(bytes)).data.text, preserveBytes: true });
-      if (assets.length && paths[0]) {
-        slideAssets.set(paths[0], assets.map((asset) => ({ ...asset, text: asset.ocrText })));
-        slideOcr.set(paths[0], assets.map((asset) => asset.ocrText).filter(Boolean).join(" "));
+      const assets = await collectZipVisualAssets(zip, ext, { recognize: async (bytes) => (await worker.recognize(bytes)).data.text, preserveBytes: true, pagePaths: paths });
+      pageCount = Math.max(pageCount, ...assets.map((asset) => Number(asset.page) || 1));
+      for (const asset of assets) {
+        const page = Number(asset.page) || 1;
+        const key = String(page);
+        const visualAssets = slideAssets.get(key) || [];
+        visualAssets.push({ ...asset, text: asset.ocrText });
+        slideAssets.set(key, visualAssets);
+        const ocr = slideOcr.get(key) || [];
+        if (asset.ocrText) ocr.push(asset.ocrText);
+        slideOcr.set(key, ocr);
       }
+      for (const [key, ocr] of slideOcr) slideOcr.set(key, ocr.join(" "));
     } finally { await worker.terminate(); }
   }
   const pages = [];
+  if (pageSources) {
+    for (let index = 0; index < pageCount; index++) {
+      const xml = pageSources[index]?.xml || "";
+      const tagged = [...xml.matchAll(/<(?:w:t|a:t|hp:t)[^>]*>([\s\S]*?)<\/(?:w:t|a:t|hp:t)>/g)].map((m) => textOnly(m[1])).filter(Boolean).join(" ");
+      const tablePattern = ext === "docx" ? /<w:tbl[\s\S]*?<\/w:tbl>/g : /<hp:tbl[\s\S]*?<\/hp:tbl>/g;
+      const tableText = [...xml.matchAll(tablePattern)].map((match) => textOnly(match[0])).filter((value) => value.length > 2);
+      const nativeText = tagged || textOnly(xml); const ocrText = slideOcr.get(String(index + 1)) || "";
+      const text = [nativeText, ocrText].filter(Boolean).filter((value, itemIndex, list) => list.indexOf(value) === itemIndex).join(" ");
+      pages.push({ page: index + 1, text, nativeText, ocrText, tableText, visualAssets: slideAssets.get(String(index + 1)) || [] });
+      await options.onUnit?.(index + 1, pageCount);
+    }
+    return pages;
+  }
   for (let index = 0; index < paths.length; index++) {
     const xml = await zip.file(paths[index]).async("string");
     const tagged = [...xml.matchAll(/<(?:w:t|a:t|hp:t)[^>]*>([\s\S]*?)<\/(?:w:t|a:t|hp:t)>/g)].map((m) => textOnly(m[1])).filter(Boolean).join(" ");
@@ -843,7 +876,7 @@ const SAFE_EXTERNAL_ERROR_CODES = new Set([
   "external_ai_invalid_response",
   "external_ai_disabled",
 ]);
-let externalApiKey = String(process.env.WEKI_GEMINI_API_KEY || "").trim();
+let externalApiKey = "";
 let externalCredentialSync = Promise.resolve();
 if (typeof process.on === "function") {
   process.on("message", (message) => {
@@ -1473,9 +1506,12 @@ app.post("/api/documents/:id/reprocess", async (req, res) => {
   const db = await readDb(); const doc = db.documents.find((item) => item.id === req.params.id);
   if (!doc) return res.status(404).json({ error: "문서를 찾을 수 없습니다." });
   if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 재처리를 시작할 수 없습니다." });
+  const requestedMode = normalizeDefaultProcessingMode(req.body?.mode || db.settings?.defaultProcessingMode || "lightweight");
+  const external = externalAiStatus(db.settings);
+  if (requestedMode === "external-ai" && !external.enabled) return res.status(409).json({ error: "external_ai_disabled", code: "external_ai_disabled" });
   let originalPath;
   try { originalPath = await ensureDocumentOriginal(doc); } catch (error) { return res.status(409).json({ error: error.message || "원본이 누락된 문서는 동일 Hash 원본을 다시 등록한 뒤 재처리할 수 있습니다." }); }
-  const runtime = await runtimeStatus(); const external = externalAiStatus(db.settings); const requestedMode = normalizeDefaultProcessingMode(req.body?.mode || db.settings?.defaultProcessingMode || "lightweight"); const modeResolution = resolveRequestedProcessingMode(requestedMode, { localAiAvailable: runtime.components["semantic-model"]?.applied === true, externalAiAvailable: external.ready, externalProvider: external.provider, externalModelId: external.modelId, externalFailureReason: external.failureReason }); const processingPolicy = { requestedMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: modeResolution.fallbackReason }; const job = { id: crypto.randomUUID(), kind: "reprocess", name: doc.name, mode: requestedMode, requestedProcessingMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, processingModeFallback: modeResolution.fallbackReason, processingPolicy, status: "queued", progress: 0, detail: "대기열에 추가되었습니다. 기존 검색 결과는 유지됩니다.", documentId: doc.id, createdAt: new Date().toISOString() };
+  const runtime = await runtimeStatus(); const modeResolution = resolveRequestedProcessingMode(requestedMode, { localAiAvailable: runtime.components["semantic-model"]?.applied === true, externalAiAvailable: external.ready, externalProvider: external.provider, externalModelId: external.modelId, externalFailureReason: external.failureReason }); const processingPolicy = { requestedMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: modeResolution.fallbackReason }; const job = { id: crypto.randomUUID(), kind: "reprocess", name: doc.name, mode: requestedMode, requestedProcessingMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, processingModeFallback: modeResolution.fallbackReason, processingPolicy, status: "queued", progress: 0, detail: "대기열에 추가되었습니다. 기존 검색 결과는 유지됩니다.", documentId: doc.id, createdAt: new Date().toISOString() };
   db.jobs.unshift(job); await writeDb(db); void runQueue(); res.status(202).json({ job, document: { ...doc, units: undefined } });
 });
 app.post("/api/jobs/:id/action", async (req, res) => {

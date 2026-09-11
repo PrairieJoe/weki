@@ -48,9 +48,124 @@ function assetPaths(files, format) {
   }).sort();
 }
 
-export async function collectZipVisualAssets(zip, format, { recognize, preserveBytes = false } = {}) {
+function normalizeZipPath(value) {
+  return String(value || "").replace(/\\/gu, "/").replace(/^\/+|^\.\//gu, "");
+}
+
+function normalizedPathParts(value) {
+  const parts = normalizeZipPath(value).split("/");
+  const result = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") result.pop();
+    else result.push(part);
+  }
+  return result;
+}
+
+function resolveZipTarget(sourcePath, target) {
+  const absolute = /^\s*\//u.test(String(target || ""));
+  const normalizedTarget = normalizeZipPath(target);
+  if (!normalizedTarget) return "";
+  const targetParts = absolute
+    ? normalizedTarget.split("/")
+    : [...normalizedPathParts(sourcePath).slice(0, -1), ...normalizedTarget.split("/")];
+  return normalizedPathParts(targetParts.join("/")).join("/");
+}
+
+function xmlAttribute(source, name) {
+  const match = String(source || "").match(new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, "iu"));
+  return match?.[1] || "";
+}
+
+function relationshipPath(sourcePath) {
+  const parts = normalizedPathParts(sourcePath);
+  const fileName = parts.pop() || "";
+  return [...parts, "_rels", `${fileName}.rels`].join("/");
+}
+
+async function documentRelationships(zip, sourcePath) {
+  const relationshipFile = zip.file(relationshipPath(sourcePath));
+  if (!relationshipFile) return new Map();
+  let xml;
+  try { xml = await relationshipFile.async("string"); } catch { return new Map(); }
+  const relationships = new Map();
+  for (const match of String(xml).matchAll(/<Relationship\b[^>]*>/giu)) {
+    const id = xmlAttribute(match[0], "Id");
+    const target = xmlAttribute(match[0], "Target");
+    if (id && target) {
+      try { relationships.set(id, decodeURIComponent(resolveZipTarget(sourcePath, target))); } catch { relationships.set(id, resolveZipTarget(sourcePath, target)); }
+    }
+  }
+  return relationships;
+}
+
+export function splitDocxLogicalPages(xml) {
+  const pages = [];
+  let start = 0;
+  const pageBreakPattern = /<w:br\b[^>]*(?:w:)?type\s*=\s*["']page["'][^>]*\/?\s*>|<w:lastRenderedPageBreak\b[^>]*\/?\s*>/giu;
+  for (const match of String(xml || "").matchAll(pageBreakPattern)) {
+    pages.push(String(xml || "").slice(start, match.index));
+    start = match.index + match[0].length;
+  }
+  pages.push(String(xml || "").slice(start));
+  return pages.length ? pages : [""];
+}
+
+function assetPathMatch(assetPaths, target) {
+  const normalizedTarget = normalizeZipPath(target).toLowerCase();
+  if (!normalizedTarget) return null;
+  return assetPaths.find((assetPath) => {
+    const normalizedAssetPath = normalizeZipPath(assetPath).toLowerCase();
+    return normalizedAssetPath === normalizedTarget || normalizedAssetPath.endsWith(`/${normalizedTarget}`);
+  }) || null;
+}
+
+function assetPageFallback(index, pageCount) {
+  return pageCount > 0 ? (index % pageCount) + 1 : 1;
+}
+
+async function assetPageAssignments(zip, format, assetPaths, pagePaths) {
+  if (!Array.isArray(pagePaths) || !pagePaths.length || !assetPaths.length) return new Map();
+  const assignments = new Map();
+  const pageXml = [];
+  for (const pagePath of pagePaths) {
+    try { pageXml.push(await zip.file(pagePath)?.async("string") || ""); } catch { pageXml.push(""); }
+  }
+  const pageCount = format === "docx" ? splitDocxLogicalPages(pageXml[0] || "").length : pageXml.length;
+  if (format === "docx") {
+    const relationships = await documentRelationships(zip, pagePaths[0]);
+    const assetByPath = new Map(assetPaths.map((assetPath) => [normalizeZipPath(assetPath).toLowerCase(), assetPath]));
+    for (const [pageIndex, xml] of splitDocxLogicalPages(pageXml[0] || "").entries()) {
+      for (const match of String(xml).matchAll(/\b(?:r:)?embed\s*=\s*["']([^"']+)["']/giu)) {
+        const target = relationships.get(match[1]);
+        const assetPath = assetPathMatch(assetPaths, target) || assetByPath.get(normalizeZipPath(target).toLowerCase());
+        if (assetPath && !assignments.has(assetPath)) assignments.set(assetPath, pageIndex + 1);
+      }
+    }
+  } else if (format === "hwpx") {
+    for (const assetPath of assetPaths) {
+      const normalizedAssetPath = normalizeZipPath(assetPath).toLowerCase();
+      const baseName = normalizedAssetPath.split("/").pop() || "";
+      const stem = baseName.replace(/\.[^.]+$/u, "");
+      const identifiers = [baseName, stem, normalizedAssetPath].filter((value) => value.length > 2);
+      const pageIndex = pageXml.findIndex((xml) => {
+        const normalizedXml = normalizeZipPath(xml).toLowerCase();
+        return identifiers.some((identifier) => normalizedXml.includes(identifier));
+      });
+      if (pageIndex >= 0) assignments.set(assetPath, pageIndex + 1);
+    }
+  }
+  for (const [index, assetPath] of assetPaths.entries()) {
+    if (!assignments.has(assetPath)) assignments.set(assetPath, assetPageFallback(index, pageCount));
+  }
+  return assignments;
+}
+
+export async function collectZipVisualAssets(zip, format, { recognize, preserveBytes = false, pagePaths } = {}) {
   const normalizedFormat = String(format || "").toLowerCase();
   const paths = assetPaths(Object.keys(zip?.files || {}), normalizedFormat);
+  const pageAssignments = await assetPageAssignments(zip, normalizedFormat, paths, pagePaths);
   const assets = [];
   for (const assetPath of paths) {
     const file = zip.file(assetPath);
@@ -60,7 +175,7 @@ export async function collectZipVisualAssets(zip, format, { recognize, preserveB
       const name = assetPath.split(/[\\/]/u).pop();
       const ocrText = typeof recognize === "function" ? String(await recognize(bytes) || "").replace(/\s+/gu, " ").trim() : "";
       const mime = mimeFor(name);
-      assets.push({ name, mime, ocrText, ...(preserveBytes ? { mimeType: mime, bytes } : {}) });
+      assets.push({ name, mime, ocrText, ...(pageAssignments.has(assetPath) ? { page: pageAssignments.get(assetPath) } : {}), ...(preserveBytes ? { mimeType: mime, bytes } : {}) });
     } catch {
       // A damaged visual asset is omitted while the surrounding document remains searchable.
     }

@@ -13,7 +13,7 @@ async function temporaryFile(t) {
   return path.join(directory, "credentials", "gemini-api-key.json");
 }
 
-function safeStorage({ available = true, decrypt = () => "AIza-test-key", encrypted = () => {} } = {}) {
+function safeStorage({ available = true, decrypt = () => "fixture-gemini-key", encrypted = () => {} } = {}) {
   return {
     isEncryptionAvailable: () => available,
     encryptString: (value) => { encrypted(value); return Buffer.from(`ciphertext:${value}`, "utf8"); },
@@ -35,7 +35,7 @@ test("Gemini credentials encrypt into a ciphertext-only record through an atomic
     writeFile: async (...args) => { operations.push("write"); return fs.writeFile(...args); },
     rename: async (...args) => { operations.push("rename"); return fs.rename(...args); },
   };
-  const key = "AIza-v1.2.3-contract-secret";
+  const key = "fixture-gemini-key";
   const encrypted = [];
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage({ encrypted: (value) => encrypted.push(value) }), fsImpl });
 
@@ -55,15 +55,15 @@ test("Gemini credentials overwrite an existing record", async (t) => {
   const filePath = await temporaryFile(t);
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
 
-  await store.saveApiKey("AIza-first");
-  await store.saveApiKey("AIza-second");
+  await store.saveApiKey("fixture-gemini-first");
+  await store.saveApiKey("fixture-gemini-second");
 
-  assert.equal(JSON.parse(await fs.readFile(filePath, "utf8")).ciphertext, Buffer.from("ciphertext:AIza-second").toString("base64"));
+  assert.equal(JSON.parse(await fs.readFile(filePath, "utf8")).ciphertext, Buffer.from("ciphertext:fixture-gemini-second").toString("base64"));
 });
 
 test("Gemini status never returns plaintext and clearing makes it unconfigured", async (t) => {
   const filePath = await temporaryFile(t);
-  const key = "AIza-status-secret";
+  const key = "fixture-gemini-status";
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage({ decrypt: () => key }) });
 
   await store.saveApiKey(key);
@@ -76,9 +76,9 @@ test("Gemini status never returns plaintext and clearing makes it unconfigured",
 test("Gemini credential status rejects records with an extra plaintext field", async (t) => {
   const filePath = await temporaryFile(t);
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
-  await store.saveApiKey("AIza-valid");
+  await store.saveApiKey("fixture-gemini-valid");
   const record = JSON.parse(await fs.readFile(filePath, "utf8"));
-  await fs.writeFile(filePath, JSON.stringify({ ...record, apiKey: "AIza-plaintext" }), "utf8");
+  await fs.writeFile(filePath, JSON.stringify({ ...record, apiKey: "fixture-gemini-plaintext" }), "utf8");
 
   assert.deepEqual(await store.getStatus(), { provider: "gemini", configured: false, encryptionAvailable: true });
 });
@@ -86,19 +86,19 @@ test("Gemini credential status rejects records with an extra plaintext field", a
 test("Gemini credentials fail explicitly when encryption is unavailable", async (t) => {
   const store = createAiCredentialsStore({ filePath: await temporaryFile(t), safeStorage: safeStorage({ available: false }) });
 
-  await assert.rejects(() => store.saveApiKey("AIza-key"), { code: "ENCRYPTION_UNAVAILABLE" });
+  await assert.rejects(() => store.saveApiKey("fixture-gemini-key"), { code: "ENCRYPTION_UNAVAILABLE" });
   assert.deepEqual(await store.getStatus(), { provider: "gemini", configured: false, encryptionAvailable: false });
 });
 
 test("a failed write keeps the existing Gemini credential and removes its temporary file", async (t) => {
   const filePath = await temporaryFile(t);
   const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
-  await store.saveApiKey("AIza-existing");
+  await store.saveApiKey("fixture-gemini-existing");
   const before = await fs.readFile(filePath, "utf8");
   const fsImpl = { ...fs, rename: async () => { throw Object.assign(new Error("rename failed"), { code: "EIO" }); } };
   const failingStore = createAiCredentialsStore({ filePath, safeStorage: safeStorage(), fsImpl });
 
-  await assert.rejects(() => failingStore.saveApiKey("AIza-new"), { code: "EIO" });
+  await assert.rejects(() => failingStore.saveApiKey("fixture-gemini-new"), { code: "EIO" });
   assert.equal(await fs.readFile(filePath, "utf8"), before);
   assert.deepEqual((await fs.readdir(path.dirname(filePath))).filter((entry) => entry.endsWith(".tmp")), []);
 });
@@ -117,7 +117,7 @@ test("Gemini IPC save and clear use a local reload and expose only safe booleans
   });
 
   try {
-    const saved = await handlers.save("AIza-local-only");
+    const saved = await handlers.save("fixture-gemini-local-only");
     const status = await handlers.status();
     const cleared = await handlers.clear();
 
@@ -143,7 +143,7 @@ test("Gemini IPC keeps configured true when local reload fails after saving", as
     reloadServer: async () => { throw new Error("local reload failed"); },
   });
 
-  const result = await handlers.save("AIza-reload-failure");
+  const result = await handlers.save("fixture-gemini-reload-failure");
 
   assert.deepEqual(result, { configured: true, encryptionAvailable: true });
   assert.equal((await store.getStatus()).configured, true);
@@ -162,4 +162,14 @@ test("local server readiness waits for a child ready message without an HTTP req
   child.emit("message", { type: "weki-server-ready" });
   await readiness;
   assert.equal(resolved, true);
+});
+
+test("local server readiness rejects after its bounded timeout", async () => {
+  const child = new EventEmitter();
+  const timeoutGuard = new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("readiness test did not settle"), { code: "TEST_TIMEOUT" })), 100));
+
+  await assert.rejects(
+    Promise.race([waitForLocalServerReady(child, { timeoutMs: 10 }), timeoutGuard]),
+    { code: "SERVER_READY_TIMEOUT" },
+  );
 });

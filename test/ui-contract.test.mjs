@@ -257,9 +257,9 @@ test("Weki source release metadata targets v1.2.3", () => {
   assert.equal(packageLock.packages?.[""].version, "1.2.3");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.2\.2/);
-  assert.match(latestYml, /version:\s*1\.2\.2/);
-  assert.match(sha256, /Weki-1\.2\.2-Setup\.exe\s+[A-Fa-f0-9]{64}/);
+  assert.match(buildInfo, /Application version:\s*1\.2\.3/);
+  assert.match(latestYml, /version:\s*1\.2\.3/);
+  assert.match(sha256, /Weki-1\.2\.3-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
@@ -361,6 +361,18 @@ test("Weki never interpolates a Gemini Key into rendered HTML or status state", 
   assert.match(credentialUi, /gemini-key-message/);
   assert.match(credentialUi, /setAttribute\("role","status"\)/);
   assert.match(credentialUi, /setAttribute\("aria-live","polite"\)/);
+});
+
+test("Weki only reports Gemini credential changes after safe IPC confirms them", () => {
+  const credentialStart = main.indexOf("function syncGeminiCredentialEditor");
+  const credentialEnd = main.indexOf("function syncGeminiSettings", credentialStart);
+  const credentialUi = credentialStart >= 0 && credentialEnd >= 0 ? main.slice(credentialStart, credentialEnd) : "";
+  assert.match(credentialUi, /const result=await window\.wekiAiCredentials\.saveGeminiKey\(draftKey\)/);
+  assert.match(credentialUi, /result\?\.configured!==true/);
+  assert.match(credentialUi, /result\?\.encryptionAvailable!==true/);
+  assert.match(credentialUi, /const result=await window\.wekiAiCredentials\.clearGeminiKey\(\)/);
+  assert.match(credentialUi, /result\?\.configured!==false/);
+  assert.doesNotMatch(credentialUi, /error\.message/);
 });
 
 test("Weki rolls back consent UI on backdrop dismissal and rejected consent PATCH", () => {

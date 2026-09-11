@@ -111,12 +111,15 @@ export function createAiCredentialIpcHandlers({ getStore, encryptionAvailable, r
   };
 }
 
-export function waitForLocalServerReady(child) {
+export function waitForLocalServerReady(child, { timeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
+    const timeout = Number.isFinite(Number(timeoutMs)) ? Math.max(0, Number(timeoutMs)) : 15_000;
+    let timer;
     const cleanup = () => {
       child.removeListener("message", onMessage);
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
+      if (timer) clearTimeout(timer);
     };
     const finish = (error) => {
       cleanup();
@@ -130,5 +133,6 @@ export function waitForLocalServerReady(child) {
     child.on("message", onMessage);
     child.once("error", onError);
     child.once("exit", onExit);
+    timer = setTimeout(() => finish(Object.assign(new Error(`Local Weki server did not report readiness within ${timeout} ms.`), { code: "SERVER_READY_TIMEOUT", timeoutMs: timeout })), timeout);
   });
 }
