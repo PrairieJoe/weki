@@ -41,13 +41,15 @@ function imageMimeType(asset) {
 async function normalizeProviderAsset(asset) {
   const bytes = imageBytes(asset);
   if (!bytes) return { excludedReason: "image_bytes_missing" };
+  const flatAsset = { ...asset };
+  delete flatAsset.embeddedAssets;
   const mimeType = imageMimeType(asset);
-  if (GEMINI_SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType)) return { asset: { ...asset, mimeType, bytes } };
+  if (GEMINI_SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType)) return { asset: { ...flatAsset, mimeType, bytes } };
   try {
     const image = await loadImage(bytes);
     const canvas = createCanvas(image.width, image.height);
     canvas.getContext("2d").drawImage(image, 0, 0);
-    return { asset: { ...asset, mime: "image/png", mimeType: "image/png", bytes: canvas.toBuffer("image/png") } };
+    return { asset: { ...flatAsset, mime: "image/png", mimeType: "image/png", bytes: canvas.toBuffer("image/png") } };
   } catch {
     return { excludedReason: "image_conversion_failed" };
   }

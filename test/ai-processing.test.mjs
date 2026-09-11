@@ -383,3 +383,32 @@ test("buildGeminiPageInput encodes only assets selected by byte and count caps",
   assert.equal(input.excludedImageCount, 2);
   assert.equal(input.totalImageBytes, 8 * 1024 * 1024);
 });
+
+test("nested provider assets are normalized and flattened once", async () => {
+  const { enrichPagesForSearch } = await import("../src/server/ai-processing.mjs");
+  const inputs = [];
+  const provider = {
+    provider: "gemini",
+    modelId: "gemini-test",
+    async enrichPage(input) {
+      inputs.push(input.images.map(({ name }) => name));
+      return { summary: "ok", topic: "topic", keywords: [], visualDescriptions: [] };
+    },
+  };
+  const page = {
+    documentId: "doc-nested-assets",
+    page: 1,
+    text: "source text",
+    visualAssets: [{
+      name: "root.png",
+      mime: "image/png",
+      bytes: Buffer.from("root-bytes"),
+      importance: 0,
+      embeddedAssets: [{ name: "child.png", mime: "image/png", bytes: Buffer.from("child-bytes"), importance: 10 }],
+    }],
+  };
+
+  await enrichPagesForSearch([page], { provider, now: () => "2026-09-11T05:06:07.000Z" });
+
+  assert.deepEqual(inputs[0], ["child.png", "root.png"]);
+});
