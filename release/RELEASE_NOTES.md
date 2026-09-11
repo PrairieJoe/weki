@@ -34,7 +34,7 @@
 - Installer: `Weki-1.2.3-Setup.exe` (232126715 bytes)
 - SHA-256: `32E759C2FFCAD223C26CA75539EDA2B415169D960089030963C39E7CE8E0952F`
 - SHA-512: `C89DBE3225A8A152D8154AA45A317D1B688F69140D77511881829C314F34B92A83BC447B62FC198F46A7F5CA85150937D8C9531D6501280A05701C9DE8A98934`
-- Update metadata: `release/latest.yml` records the matching base64 SHA-512 and release date from the builder output.
+- Update metadata: `release/latest.yml` records the matching base64 SHA-512, source commit, and release date from the builder output.
 
 ---
 

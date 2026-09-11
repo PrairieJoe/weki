@@ -46,3 +46,27 @@ The repository intentionally excludes the following ignored fixtures, so the dep
 - `test_data/전남광주통합특별시_대전환의_길_교통.hwpx`
 
 No product or packaging failure remains from the completed checks.
+
+## Final-fix round 2 — provenance P2
+
+Base: `b48f94d`  
+Already verified artifact source commit: `c027395c045fd438dd06c8d15885f52b98fce9d2`
+
+- `scripts/generate-release-metadata.mjs` now accepts `--source-commit <revision>` and resolves it to the full commit with `git rev-parse --verify`; omitting the option continues to use the current `HEAD`.
+- `--check`/`--dry-run` performs a write-suppressed byte-for-byte comparison against all four tracked metadata files.
+- `release/latest.yml`, `release/BUILD_INFO.txt`, and the generated release notes explicitly record the source commit used for the artifact. The generator validates that provenance while checking.
+- The existing v1.2.3 installer was reused; no rebuild was run and its version, size, SHA-256, SHA-512, and release date remained unchanged.
+
+Round-2 command results:
+
+| Command | Result |
+|---|---|
+| `npm run release:metadata -- release/Weki-1.2.3-Setup.exe --source-commit c027395` | PASS; write regenerated all four files with source commit `c027395c045fd438dd06c8d15885f52b98fce9d2` |
+| `npm run release:metadata -- release/Weki-1.2.3-Setup.exe --source-commit c027395 --check` | PASS; exit 0 |
+| Same `--check` command, second run | PASS; exit 0 |
+| Machine comparison of both check outputs | `identical: true` |
+| `node --check scripts/generate-release-metadata.mjs` | PASS |
+| `node --test test/ui-contract.test.mjs` | 51 passed, 0 failed |
+| `git diff --check` | PASS |
+
+Both check runs reported: artifact `Weki-1.2.3-Setup.exe`, size `232126715`, SHA-256 `32E759C2FFCAD223C26CA75539EDA2B415169D960089030963C39E7CE8E0952F`, SHA-512 `C89DBE3225A8A152D8154AA45A317D1B688F69140D77511881829C314F34B92A83BC447B62FC198F46A7F5CA85150937D8C9531D6501280A05701C9DE8A98934`, and release date `2026-09-11T07:34:08.070Z`.

@@ -20,6 +20,7 @@ const runScript = await readFile(new URL("../run-weki.bat", import.meta.url), "u
 const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.meta.url), "utf8");
 const latestYml = await readFile(new URL("../release/latest.yml", import.meta.url), "utf8");
 const sha256 = await readFile(new URL("../release/SHA256.txt", import.meta.url), "utf8");
+const releaseNotesGenerated = await readFile(new URL("../release/RELEASE_NOTES.md", import.meta.url), "utf8");
 const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV123 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.3.md", import.meta.url), "utf8").catch(() => "");
@@ -258,12 +259,15 @@ test("Weki source release metadata targets v1.2.3", () => {
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
   assert.match(buildInfo, /Application version:\s*1\.2\.3/);
+  assert.match(buildInfo, /Application source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
   assert.match(latestYml, /version:\s*1\.2\.3/);
+  assert.match(latestYml, /source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
   assert.match(sha256, /Weki-1\.2\.3-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
   assert.match(releaseNotesV123, /1\.2\.3/);
+  assert.match(releaseNotesGenerated, /Source commit: `c027395c045fd438dd06c8d15885f52b98fce9d2`/);
 });
 
 test("Weki exposes the nine-step onboarding targets in order", () => {
