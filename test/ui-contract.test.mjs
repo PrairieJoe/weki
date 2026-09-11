@@ -290,9 +290,23 @@ test("Weki keeps onboarding copy read-only and exposes the compatibility screen 
   assert.match(onboarding, /실제 문서나 설정을 변경하지 않습니다/);
 });
 
-test("Weki installer retains installation-folder and document-data-location copy", () => {
-  assert.match(installer, /설치 폴더/);
-  assert.match(installer, /문서 데이터 저장 위치/);
+test("Weki separates installed-model and external-AI defaults from per-document processing choices", () => {
+  const defaultControl = main.match(/function syncProcessingDefaultControls\(\).*?\n}\n/s)?.[0] || "";
+  assert.match(defaultControl, /default-processing-mode/);
+  assert.match(defaultControl, /local-ai/);
+  assert.match(defaultControl, /external-ai/);
+  assert.doesNotMatch(defaultControl, /value="lightweight"/);
+  const registration = main.match(/function addPage\(\).*?\n}\n/s)?.[0] || "";
+  assert.match(registration, /value="lightweight"/);
+  assert.match(registration, /value="local-ai"/);
+  assert.match(registration, /value="external-ai"/);
+});
+
+test("Weki installer keeps installation-folder copy on the program page and data-location copy on the data page", () => {
+  const programPage = installer.slice(installer.indexOf("Function WekiInstallDirPageCreate"), installer.indexOf("Function WekiDataPageCreate"));
+  const dataPage = installer.slice(installer.indexOf("Function WekiDataPageCreate"), installer.indexOf("Function WekiDataPageLeave"));
+  assert.match(programPage, /설치 폴더/);
+  assert.match(dataPage, /문서 데이터 저장 위치/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {

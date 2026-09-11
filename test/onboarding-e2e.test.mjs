@@ -132,6 +132,8 @@ async function launchEmptyApp() {
     });
     const page = await waitFor("Electron window", async () => browser.contexts()[0]?.pages()[0] || null);
     const mutationRequests = [];
+    const requestLog = [];
+    page.on("request", (request) => requestLog.push({ method: request.method(), url: request.url() }));
     const recordMutation = (request) => {
       if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) {
         mutationRequests.push({ method: request.method(), url: request.url() });
@@ -146,7 +148,7 @@ async function launchEmptyApp() {
         throw new Error(`${error.message}\nURL: ${page.url()}\nBODY: ${await page.locator("body").innerText().catch(() => "")}\n${processOutput}`);
       }
     });
-    return { page, cleanup, processOutput: () => processOutput, mutationRequests, recordMutation };
+    return { page, cleanup, processOutput: () => processOutput, mutationRequests, requestLog, recordMutation };
   } catch (error) {
     await cleanup();
     throw error;
@@ -177,7 +179,7 @@ async function assertStep(page, index, pageName, targetName) {
 test("fixture-free Electron onboarding tour completes, suppresses, replays, and closes", async (t) => {
   const app = await launchEmptyApp();
   t.after(app.cleanup);
-  const { page, mutationRequests, recordMutation } = app;
+  const { page, mutationRequests, requestLog, recordMutation } = app;
 
   await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
   await assertStep(page, 1, "add", "registration-screen");
@@ -194,6 +196,11 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   ]) {
     await page.locator("[data-onboarding-next]").click();
     await assertStep(page, index, pageName, targetName);
+    if (index === 7 || index === 8) {
+      const requestCount = requestLog.length;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      assert.equal(requestLog.length, requestCount, `step ${index} issued fetches while displayed`);
+    }
   }
   await page.locator("[role=dialog]").evaluate(async (dialog) => {
     await Promise.all(dialog.getAnimations().map((animation) => animation.finished.catch(() => {})));
@@ -234,6 +241,20 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-onboarding-replay")), true);
   await guide.click();
   await assertStep(page, 1, "add", "registration-screen");
+  const draggedDialog = page.locator("[role=dialog]");
+  const draggedTitle = page.locator("[role=dialog] .onboarding-title");
+  const draggedBefore = await draggedDialog.boundingBox();
+  await draggedTitle.dispatchEvent("pointerdown", { clientX: draggedBefore.x + 10, clientY: draggedBefore.y + 10, pointerId: 1 });
+  await draggedTitle.dispatchEvent("pointermove", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await draggedTitle.dispatchEvent("pointerup", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await page.locator("[data-onboarding-close]").click();
+  await waitFor("dragged tour close", async () => (await page.locator("#onboarding-root").count()) === 0);
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.locator("[data-onboarding-replay]").click();
+  await assertStep(page, 1, "add", "registration-screen");
+  const replayDialog = await page.locator("[role=dialog]").boundingBox();
+  assert.ok(Math.abs(replayDialog.x + replayDialog.width / 2 - 180) <= 2);
+  assert.ok(Math.abs(replayDialog.y + replayDialog.height / 2 - 320) <= 2);
   await page.keyboard.press("Escape");
   await waitFor("tour Escape close", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("search page after Escape", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
