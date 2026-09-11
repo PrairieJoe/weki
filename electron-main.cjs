@@ -65,6 +65,34 @@ const packagedIconPath = path.join(__dirname, 'dist', 'app-icon.png');
 const myboxCredentialState = { state: 'missing', token: null };
 let activeDataDir = null;
 let activeServerEnv = null;
+const aiCredentialStore = async () => {
+  const { createAiCredentialsStore } = await import('./src/server/ai-credentials.mjs');
+  return createAiCredentialsStore({ filePath: path.join(activeDataDir, 'credentials', 'gemini-api-key.json'), safeStorage });
+};
+const sendStoredGeminiKeyToServer = async () => {
+  if (!server || !server.connected || !activeDataDir) return false;
+  let apiKey = null;
+  try { apiKey = await (await aiCredentialStore()).getApiKeyForServer(); } catch {}
+  const message = { type: 'weki:gemini-credential' };
+  if (apiKey) message.apiKey = apiKey;
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), 2000);
+    const finish = (success) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      server.removeListener('message', onMessage);
+      resolve(success);
+    };
+    const onMessage = (received) => {
+      if (received?.type === 'weki-gemini-credential-applied') finish(true);
+    };
+    server.on('message', onMessage);
+    try { server.send(message, (error) => { if (error) finish(false); }); }
+    catch { finish(false); }
+  });
+};
 const serverIsReady = async () => { try { return (await fetch(`${appUrl}/api/status`)).ok; } catch { return false; } };
 const waitForServer = async () => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -159,9 +187,32 @@ const restartOwnedServer = async () => {
       setTimeout(finish, 2000);
     });
   }
-  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: 'ignore', windowsHide: true });
+  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
   await waitForServer();
+  await sendStoredGeminiKeyToServer();
   return true;
+};
+const reloadOwnedServer = async () => {
+  if (!ownsServer || !activeServerEnv) return false;
+  const oldServer = server;
+  if (oldServer && !oldServer.killed) {
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      oldServer.once('exit', finish);
+      oldServer.kill();
+      setTimeout(finish, 2000);
+    });
+  }
+  const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
+  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
+  await waitForLocalServerReady(server);
+  await sendStoredGeminiKeyToServer();
+  return true;
+};
+const getAiCredentialHandlers = async () => {
+  const { createAiCredentialIpcHandlers } = await import('./src/server/ai-credentials.mjs');
+  return createAiCredentialIpcHandlers({ getStore: aiCredentialStore, encryptionAvailable: () => safeStorage.isEncryptionAvailable(), reloadServer: reloadOwnedServer });
 };
 ipcMain.handle('weki:credential-status', () => ({ state: myboxCredentialState.state, encryptionAvailable: safeStorage.isEncryptionAvailable() }));
 ipcMain.handle('weki:save-mybox-token', async (_event, value) => {
@@ -189,6 +240,9 @@ ipcMain.handle('weki:clear-mybox-token', async () => {
   const applied = await restartOwnedServer();
   return { ok: true, state: 'missing', applied };
 });
+ipcMain.handle('weki:gemini-credential-status', async () => (await getAiCredentialHandlers()).status());
+ipcMain.handle('weki:save-gemini-key', async (_event, apiKey) => (await getAiCredentialHandlers()).save(apiKey));
+ipcMain.handle('weki:clear-gemini-key', async () => (await getAiCredentialHandlers()).clear());
 ipcMain.handle('weki:restart', () => {
   app.relaunch();
   app.exit(0);
@@ -230,9 +284,10 @@ app.whenReady().then(async () => {
     if (myboxCredentialState.token) activeServerEnv.NAVER_MBOX_TOKEN = myboxCredentialState.token;
     else delete activeServerEnv.NAVER_MBOX_TOKEN;
     if (!app.isPackaged) activeServerEnv.WEKI_ENV_FILE = path.join(__dirname, '.env');
-    server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: 'ignore', windowsHide: true }); ownsServer = true;
+    server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }); ownsServer = true;
   }
   await waitForServer();
+  if (ownsServer) await sendStoredGeminiKeyToServer();
   const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 1024, minHeight: 700, title: 'Weki', icon: fs.existsSync(packagedIconPath) ? packagedIconPath : undefined, webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'src', 'preload.cjs') } });
   await window.loadURL(`${appUrl}/`);
 });

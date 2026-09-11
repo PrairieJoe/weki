@@ -30,6 +30,39 @@ test("collects DOCX and HWPX embedded image assets for OCR", async () => {
   assert.deepEqual(assets, [{ name: "population-chart.png", mime: "image/png", ocrText: "OO시 인구" }]);
 });
 
+test("associates DOCX embedded images with explicit logical page breaks", async () => {
+  const zip = new JSZip();
+  zip.file("word/document.xml", `<w:document><w:body><w:p><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:p><w:p><w:r><w:br w:type="page"/></w:r></w:p><w:p><w:drawing><a:blip r:embed="rId2"/></w:drawing></w:p></w:body></w:document>`);
+  zip.file("word/_rels/document.xml.rels", `<Relationships><Relationship Id="rId1" Target="media/first.png"/><Relationship Id="rId2" Target="media/second.png"/></Relationships>`);
+  zip.file("word/media/first.png", Buffer.from("first-image"));
+  zip.file("word/media/second.png", Buffer.from("second-image"));
+  const loaded = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+  const assets = await collectZipVisualAssets(loaded, "docx", { pagePaths: ["word/document.xml"], preserveBytes: true });
+
+  assert.deepEqual(assets.map(({ name, page }) => ({ name, page })), [{ name: "first.png", page: 1 }, { name: "second.png", page: 2 }]);
+  assert.deepEqual(assets.map(({ bytes }) => bytes), [Buffer.from("first-image"), Buffer.from("second-image")]);
+});
+
+test("associates HWPX embedded images with referenced sections and uses stable asset-order fallback", async () => {
+  const zip = new JSZip();
+  zip.file("Contents/section0.xml", `<hp:section><hc:img binaryItemIDRef="chart-a"/></hp:section>`);
+  zip.file("Contents/section1.xml", `<hp:section><hc:img binaryItemIDRef="chart-b"/></hp:section>`);
+  zip.file("Contents/BinData/chart-a.png", Buffer.from("chart-a"));
+  zip.file("Contents/BinData/chart-b.png", Buffer.from("chart-b"));
+  zip.file("Contents/BinData/unreferenced.png", Buffer.from("unreferenced"));
+  const loaded = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+  const assets = await collectZipVisualAssets(loaded, "hwpx", { pagePaths: ["Contents/section0.xml", "Contents/section1.xml"], preserveBytes: true });
+
+  assert.deepEqual(assets.map(({ name, page }) => ({ name, page })), [
+    { name: "chart-a.png", page: 1 },
+    { name: "chart-b.png", page: 2 },
+    { name: "unreferenced.png", page: 1 },
+  ]);
+  assert.ok(assets.every(({ bytes }) => Buffer.isBuffer(bytes)));
+});
+
 test("keeps PPTX asset names compatible with the existing visual endpoint", async () => {
   const zip = new JSZip();
   zip.file("ppt/media/chart.jpg", Buffer.from("jpg"));

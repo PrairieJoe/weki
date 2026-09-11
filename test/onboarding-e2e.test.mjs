@@ -132,6 +132,8 @@ async function launchEmptyApp() {
     });
     const page = await waitFor("Electron window", async () => browser.contexts()[0]?.pages()[0] || null);
     const mutationRequests = [];
+    const requestLog = [];
+    page.on("request", (request) => requestLog.push({ method: request.method(), url: request.url() }));
     const recordMutation = (request) => {
       if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) {
         mutationRequests.push({ method: request.method(), url: request.url() });
@@ -146,7 +148,7 @@ async function launchEmptyApp() {
         throw new Error(`${error.message}\nURL: ${page.url()}\nBODY: ${await page.locator("body").innerText().catch(() => "")}\n${processOutput}`);
       }
     });
-    return { page, cleanup, processOutput: () => processOutput, mutationRequests, recordMutation };
+    return { page, cleanup, processOutput: () => processOutput, mutationRequests, requestLog, recordMutation };
   } catch (error) {
     await cleanup();
     throw error;
@@ -157,40 +159,49 @@ async function assertStep(page, index, pageName, targetName) {
   await page.waitForFunction(({ expectedProgress, expectedPage, expectedTarget }) => {
     const progress = document.querySelector("[data-onboarding-progress]")?.textContent?.trim();
     const activePage = document.querySelector(`button.nav-item[data-nav="${expectedPage}"]`)?.getAttribute("aria-current") === "page";
-    const target = document.querySelector(`[data-onboarding-target="${expectedTarget}"]`);
-    return progress === expectedProgress && activePage && Boolean(target);
+    const target = expectedTarget ? document.querySelector(`[data-onboarding-target="${expectedTarget}"]`) : null;
+    return progress === expectedProgress && activePage && (!expectedTarget || Boolean(target));
   }, {
-    expectedProgress: `${index} / 5`,
+    expectedProgress: `${index} / 9`,
     expectedPage: pageName,
     expectedTarget: targetName,
   });
-  assert.equal(await page.locator(`[data-onboarding-target="${targetName}"]`).count(), 1);
-  if (targetName === "evidence-fallback") {
-    assert.equal(await page.locator(`[data-onboarding-target="${targetName}"]`).getAttribute("data-onboarding-fallback"), "true");
-    assert.equal(await page.locator("#onboarding-root").getAttribute("data-onboarding-fallback"), "true");
-    assert.notEqual(await page.locator("[data-onboarding-spotlight]").getAttribute("hidden"), null);
-  } else {
+  if (targetName) {
+    assert.equal(await page.locator(`[data-onboarding-target="${targetName}"]`).count(), 1);
     assert.equal(await page.locator("[data-onboarding-spotlight]").getAttribute("hidden"), null);
+  } else {
+    assert.equal(await page.locator("[data-onboarding-spotlight]").getAttribute("hidden") !== null, true);
   }
 }
 
 test("fixture-free Electron onboarding tour completes, suppresses, replays, and closes", async (t) => {
   const app = await launchEmptyApp();
   t.after(app.cleanup);
-  const { page, mutationRequests, recordMutation } = app;
+  const { page, mutationRequests, requestLog, recordMutation } = app;
 
   await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
-  await assertStep(page, 1, "add", "registration-dropzone");
+  await assertStep(page, 1, "add", null);
   assert.equal(await page.locator("[role=dialog][aria-modal=true]").count(), 1);
   assert.equal(
     await page.locator("[data-onboarding-scrim]").evaluate((element) => getComputedStyle(element).backgroundColor),
     "rgba(24, 28, 32, 0.42)",
   );
 
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 2, "search", "search-composer");
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 3, "search", "evidence-fallback");
+  for (const [index, pageName, targetName] of [
+    [2, "add", "choose-files"], [3, "add", "registration-mode"], [4, "add", "processing-queue"],
+    [5, "documents", "documents-empty"], [6, "search", "search-composer"], [7, "search", null],
+    [8, "search", null],
+  ]) {
+    const requestCountBeforeTransition = requestLog.length;
+    await page.locator("[data-onboarding-next]").click();
+    await assertStep(page, index, pageName, targetName);
+    if (index === 7 || index === 8) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      assert.equal(requestLog.length, requestCountBeforeTransition, `step ${index} issued fetches during transition or while displayed`);
+      assert.equal(await page.locator(`[data-onboarding-example="${index === 7 ? "results" : "evidence"}"]`).count(), 1);
+      assert.equal(await page.locator(`[data-onboarding-example="${index === 7 ? "results" : "evidence"}"] [data-document-id]`).count(), 0);
+    }
+  }
   await page.locator("[role=dialog]").evaluate(async (dialog) => {
     await Promise.all(dialog.getAnimations().map((animation) => animation.finished.catch(() => {})));
   });
@@ -212,10 +223,7 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   assert.ok(fallbackLayout.centeredX <= 2, `fallback dialog is not horizontally centered: ${fallbackLayout.centeredX}px`);
   assert.ok(fallbackLayout.centeredY <= 2, `fallback dialog is not vertically centered: ${fallbackLayout.centeredY}px`);
   await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 4, "settings", "processing-mode");
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 5, "settings", "mybox");
-
+  await assertStep(page, 9, "settings", "mybox");
   await page.locator("[data-onboarding-next]").click();
   await waitFor("tour completion", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("original search page", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
@@ -232,7 +240,23 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   await guide.focus();
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-onboarding-replay")), true);
   await guide.click();
-  await assertStep(page, 1, "add", "registration-dropzone");
+  await assertStep(page, 1, "add", null);
+  const draggedDialog = page.locator("[role=dialog]");
+  const draggedTitle = page.locator("[role=dialog] .onboarding-title");
+  const draggedBefore = await draggedDialog.boundingBox();
+  await draggedTitle.dispatchEvent("pointerdown", { clientX: draggedBefore.x + 10, clientY: draggedBefore.y + 10, pointerId: 1 });
+  await draggedTitle.dispatchEvent("pointermove", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await draggedTitle.dispatchEvent("pointerup", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await page.locator("[data-onboarding-close]").click();
+  await waitFor("dragged tour close", async () => (await page.locator("#onboarding-root").count()) === 0);
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.locator("[data-onboarding-replay]").click();
+  await assertStep(page, 1, "add", null);
+  await page.locator("[role=dialog]").evaluate(async (dialog) => Promise.all(dialog.getAnimations().map((animation) => animation.finished.catch(() => {}))));
+  const replayDialog = await page.locator("[role=dialog]").boundingBox();
+  const replayViewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  assert.ok(Math.abs(replayDialog.x + replayDialog.width / 2 - replayViewport.width / 2) <= 2, JSON.stringify({ replayDialog, replayViewport }));
+  assert.ok(Math.abs(replayDialog.y + replayDialog.height / 2 - replayViewport.height / 2) <= 2, JSON.stringify({ replayDialog, replayViewport }));
   await page.keyboard.press("Escape");
   await waitFor("tour Escape close", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("search page after Escape", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
@@ -311,4 +335,30 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
       if (row.action) assert.ok(row.action.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime action is clipped`);
     }
   }
+});
+
+test("onboarding dialog supports title pointer drag with viewport clamping and mobile centering", async (t) => {
+  const app = await launchEmptyApp();
+  t.after(app.cleanup);
+  const { page } = app;
+  await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
+  const title = page.locator("[role=dialog] .onboarding-title");
+  const before = await page.locator("[role=dialog]").boundingBox();
+  await title.dispatchEvent("pointerdown", { clientX: before.x + 10, clientY: before.y + 10, pointerId: 1 });
+  await title.dispatchEvent("pointermove", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await title.dispatchEvent("pointerup", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  const clamped = await page.locator("[role=dialog]").boundingBox();
+  const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  assert.ok(clamped, `dialog disappeared after drag; body=${await page.locator("body").innerText()}`);
+  assert.ok(clamped.x >= 0 && clamped.y >= 0);
+  assert.ok(clamped.x + clamped.width <= viewport.width && clamped.y + clamped.height <= viewport.height);
+
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.locator("[data-onboarding-close]").click();
+  await page.locator("[data-onboarding-replay]").click();
+  await page.locator("[role=dialog]").evaluate(async (dialog) => Promise.all(dialog.getAnimations().map((animation) => animation.finished.catch(() => {}))));
+  const centered = await page.locator("[role=dialog]").boundingBox();
+  const centeredViewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  assert.ok(Math.abs(centered.x + centered.width / 2 - centeredViewport.width / 2) <= 2, JSON.stringify({ centered, centeredViewport }));
+  assert.ok(Math.abs(centered.y + centered.height / 2 - centeredViewport.height / 2) <= 2, JSON.stringify({ centered, centeredViewport }));
 });

@@ -29,7 +29,8 @@ export function hasPdfVisualContent(operatorList) {
 
 export function buildPdfVisualAsset({ page, bytes, ocrText = "" }) {
   const normalizedOcr = String(ocrText || "").replace(/\s+/gu, " ").trim();
-  return { name: `page-${Number(page) || 1}.png`, mime: "image/png", bytes, ocrText: normalizedOcr, text: normalizedOcr, source: "rendered-page" };
+  const imageBytes = bytes instanceof Uint8Array ? bytes : Buffer.from(bytes || []);
+  return { name: `page-${Number(page) || 1}.png`, mime: "image/png", bytes: imageBytes, ocrText: normalizedOcr, text: normalizedOcr, source: "rendered-page" };
 }
 
 export async function renderPdfPagePng(buffer, pageNumber, { scale = 1.5 } = {}) {

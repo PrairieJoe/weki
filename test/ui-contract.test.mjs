@@ -14,12 +14,16 @@ const myboxSync = await readFile(new URL("../src/server/mybox-sync.mjs", import.
 const installer = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");
 const statusApiTest = await readFile(new URL("../test/status-api.test.mjs", import.meta.url), "utf8");
 const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+const prd = await readFile(new URL("../docs/PRD_Weki.md", import.meta.url), "utf8");
+const userTestChecklist = await readFile(new URL("../docs/USER_TEST_CHECKLIST.md", import.meta.url), "utf8");
 const runScript = await readFile(new URL("../run-weki.bat", import.meta.url), "utf8");
 const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.meta.url), "utf8");
 const latestYml = await readFile(new URL("../release/latest.yml", import.meta.url), "utf8");
 const sha256 = await readFile(new URL("../release/SHA256.txt", import.meta.url), "utf8");
+const releaseNotesGenerated = await readFile(new URL("../release/RELEASE_NOTES.md", import.meta.url), "utf8");
 const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
+const releaseNotesV123 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.3.md", import.meta.url), "utf8").catch(() => "");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
@@ -248,30 +252,33 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki source and packaged release metadata target v1.2.2", () => {
-  assert.equal(packageJson.version, "1.2.2");
-  assert.equal(packageLock.version, "1.2.2");
-  assert.equal(packageLock.packages?.[""].version, "1.2.2");
+test("Weki source release metadata targets v1.2.3", () => {
+  assert.equal(packageJson.version, "1.2.3");
+  assert.equal(packageLock.version, "1.2.3");
+  assert.equal(packageLock.packages?.[""].version, "1.2.3");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.2\.2/);
-  assert.match(buildInfo, /Weki-1\.2\.2-Setup\.exe/);
-  assert.match(latestYml, /version:\s*1\.2\.2/);
-  assert.match(latestYml, /Weki-1\.2\.2-Setup\.exe/);
-  assert.match(sha256, /Weki-1\.2\.2-Setup\.exe\s+[A-Fa-f0-9]{64}/);
-  assert.match(readme, /v1\.2\.2 현재 정책/);
-  assert.match(readme, /release\/Weki-1\.2\.2-Setup\.exe/);
+  assert.match(buildInfo, /Application version:\s*1\.2\.3/);
+  assert.match(buildInfo, /Application source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
+  assert.match(latestYml, /version:\s*1\.2\.3/);
+  assert.match(latestYml, /source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
+  assert.match(sha256, /Weki-1\.2\.3-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
+  assert.match(releaseNotesV123, /1\.2\.3/);
+  assert.match(releaseNotesGenerated, /Source commit: `c027395c045fd438dd06c8d15885f52b98fce9d2`/);
 });
 
-test("Weki exposes a replayable five-step onboarding tour", () => {
+test("Weki exposes the nine-step onboarding targets in order", () => {
   assert.match(main, /사용 가이드/);
   assert.match(main, /data-onboarding-replay/);
-  for (const target of ["search-composer", "registration-dropzone", "evidence-fallback", "processing-mode", "mybox"]) {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "mybox"]) {
     assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
   }
+  assert.match(onboarding, /data-onboarding-example/);
+  assert.match(onboarding, /example-results/);
+  assert.match(onboarding, /example-evidence/);
   assert.match(onboarding, /role=["']dialog["']/);
   assert.match(onboarding, /aria-modal=["']true["']/);
   assert.match(onboarding, /data-onboarding-progress/);
@@ -281,6 +288,161 @@ test("Weki exposes a replayable five-step onboarding tour", () => {
   assert.match(styles, /--onboarding-scrim:\s*rgba\(24,\s*28,\s*32,\s*0\.42\)/);
   assert.match(styles, /\.onboarding-scrim\{[^}]*background:var\(--onboarding-scrim\)/);
   assert.doesNotMatch(styles, /rgba\(8,\s*12,\s*58/);
+});
+
+test("Weki keeps onboarding copy read-only and exposes the compatibility screen targets", () => {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "mybox"]) {
+    assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
+  }
+  assert.match(onboarding, /실제 문서나 설정을 변경하지 않습니다/);
+  assert.match(onboarding, /결과에서 근거로 이어짐/);
+  assert.match(onboarding, /2026년 4월부터/);
+});
+
+test("Weki binds Gemini settings controls through one render path", () => {
+  const renderWrapper = main.slice(main.indexOf("render=function(){"), main.indexOf("onboardingController=createOnboardingController"));
+  assert.doesNotMatch(renderWrapper, /syncGeminiCredentialEditor\(\)/);
+  const settingsSync = main.slice(main.indexOf("function syncGeminiSettings"), main.indexOf("function runtimeInstallMetadata"));
+  assert.equal((settingsSync.match(/syncGeminiCredentialEditor\(\)/g) || []).length, 1);
+});
+
+test("Weki separates installed-model and external-AI defaults from per-document processing choices", () => {
+  const defaultStart = main.indexOf("function settingsPageV2");
+  const defaultEnd = main.indexOf("function dialog", defaultStart);
+  const defaultControl = defaultStart >= 0 && defaultEnd >= 0 ? main.slice(defaultStart, defaultEnd) : "";
+  const defaultChoices = [...defaultControl.matchAll(/<input[^>]+(?:value="([^"]+)"[^>]+name="default-processing-mode"|name="default-processing-mode"[^>]+value="([^"]+)")/g)].map((match) => match[1] || match[2]);
+  assert.deepEqual(defaultChoices, ["installed-model", "external-ai"]);
+  const registrationStart = main.indexOf("function addPage");
+  const registrationEnd = main.indexOf("function settingsPage", registrationStart);
+  const registration = registrationStart >= 0 && registrationEnd >= 0 ? main.slice(registrationStart, registrationEnd) : "";
+  const perDocumentModes = [...registration.matchAll(/<input[^>]+value="([^"]+)"[^>]+name="mode"/g)].map((match) => match[1]);
+  assert.deepEqual(perDocumentModes, ["lightweight", "local-ai", "external-ai"]);
+});
+
+test("Weki exposes the Task 6 local and Gemini settings contract", () => {
+  assert.match(main, /설치된 모델 사용/);
+  assert.match(main, /외부 AI 사용/);
+  assert.match(main, /id="default-processing-mode-installed"/);
+  assert.match(main, /id="default-processing-mode-external"/);
+  assert.match(main, /id="gemini-api-key"[^>]+type="password"/);
+  assert.match(main, /id="save-gemini-key"/);
+  assert.match(main, /id="clear-gemini-key"/);
+  assert.match(main, /id="refresh-gemini-models"/);
+  assert.match(main, /id="gemini-model"/);
+  assert.match(main, /id="check-gemini-connection"/);
+  assert.match(main, /id="external-ai-enabled"/);
+  assert.match(main, /\/api\/ai\/gemini\/models/);
+  assert.match(main, /\/api\/ai\/gemini\/check/);
+  assert.match(main, /supportsGenerateContent!==false/);
+  assert.match(main, /window\.wekiAiCredentials\.saveGeminiKey/);
+  assert.match(main, /window\.wekiAiCredentials\.clearGeminiKey/);
+  assert.match(main, /consentVersion:1/);
+  assert.match(main, /external_ai_disabled/);
+  assert.match(main, /외부 AI를 끄면 신규 작업/);
+  assert.match(main, /설치된 모델, 경량 처리 순으로 진행됩니다/);
+  assert.match(main, /data-gemini-warning/);
+  assert.match(styles, /\.external-ai-settings/);
+  const checkStart = main.indexOf("async function checkGeminiConnection");
+  const checkEnd = main.indexOf("function syncGeminiCredentialEditor", checkStart);
+  const checkUi = main.slice(checkStart, checkEnd);
+  assert.match(checkUi, /body:JSON\.stringify\(\{\}\)/);
+  assert.doesNotMatch(checkUi, /JSON\.stringify\(\{[^}]*document/);
+  const credentialStart = main.indexOf("function syncGeminiCredentialEditor");
+  const credentialEnd = main.indexOf("function syncGeminiSettings", credentialStart);
+  const credentialUi = main.slice(credentialStart, credentialEnd);
+  assert.doesNotMatch(credentialUi, /\/api\/ai\/gemini\/(?:models|check)/);
+});
+
+test("Weki never interpolates a Gemini Key into rendered HTML or status state", () => {
+  const credentialStart = main.indexOf("function syncGeminiCredentialEditor");
+  const credentialEnd = main.indexOf("function scheduleRuntimeRestart", credentialStart);
+  const credentialUi = credentialStart >= 0 && credentialEnd >= 0 ? main.slice(credentialStart, credentialEnd) : "";
+  assert.match(credentialUi, /let draftKey/);
+  assert.doesNotMatch(credentialUi, /value=\\"\\$\{[^}]*apiKey/);
+  assert.doesNotMatch(credentialUi, /innerHTML[^;]*apiKey/);
+  assert.match(credentialUi, /input\.value=""/);
+  assert.match(credentialUi, /getGeminiStatus/);
+  assert.match(credentialUi, /gemini-key-message/);
+  assert.match(credentialUi, /setAttribute\("role","status"\)/);
+  assert.match(credentialUi, /setAttribute\("aria-live","polite"\)/);
+});
+
+test("Weki only reports Gemini credential changes after safe IPC confirms them", () => {
+  const credentialStart = main.indexOf("function syncGeminiCredentialEditor");
+  const credentialEnd = main.indexOf("function syncGeminiSettings", credentialStart);
+  const credentialUi = credentialStart >= 0 && credentialEnd >= 0 ? main.slice(credentialStart, credentialEnd) : "";
+  assert.match(credentialUi, /const result=await window\.wekiAiCredentials\.saveGeminiKey\(draftKey\)/);
+  assert.match(credentialUi, /result\?\.configured!==true/);
+  assert.match(credentialUi, /result\?\.encryptionAvailable!==true/);
+  assert.match(credentialUi, /const result=await window\.wekiAiCredentials\.clearGeminiKey\(\)/);
+  assert.match(credentialUi, /result\?\.configured!==false/);
+  assert.doesNotMatch(credentialUi, /error\.message/);
+});
+
+test("Weki rolls back consent UI on backdrop dismissal and rejected consent PATCH", () => {
+  const dismissalStart = main.indexOf('document.addEventListener("keydown"');
+  const dismissalEnd = main.indexOf("refresh().then", dismissalStart);
+  const dismissal = dismissalStart >= 0 && dismissalEnd >= 0 ? main.slice(dismissalStart, dismissalEnd) : "";
+  assert.match(dismissal, /data-dialog-backdrop/);
+  assert.match(dismissal, /dismissDialog\(\)/);
+  assert.match(dismissal, /event\.target===backdrop/);
+  assert.match(main, /function dismissDialog\(\)/);
+
+  const rollbackStart = main.indexOf("async function reconcileExternalAiAfterConsentFailure");
+  const rollbackEnd = main.indexOf("function requestExternalAiConsent", rollbackStart);
+  const rollback = rollbackStart >= 0 && rollbackEnd >= 0 ? main.slice(rollbackStart, rollbackEnd) : "";
+  assert.match(rollback, /processingDefaultDraft="installed-model"/);
+  assert.match(rollback, /externalAiToggleDraft=false/);
+  assert.match(rollback, /await refresh\(\)\.catch/);
+  const defaultSaveStart = main.indexOf("async function saveProcessingDefault");
+  const defaultSaveEnd = main.indexOf("function syncDefaultProcessingMode", defaultSaveStart);
+  const defaultSave = defaultSaveStart >= 0 && defaultSaveEnd >= 0 ? main.slice(defaultSaveStart, defaultSaveEnd) : "";
+  assert.match(defaultSave, /if\(consent\)await reconcileExternalAiAfterConsentFailure\(\)/);
+
+  const consentStart = main.indexOf("function requestExternalAiConsent");
+  const consentEnd = main.indexOf("function externalEnabled", consentStart);
+  const consent = consentStart >= 0 && consentEnd >= 0 ? main.slice(consentStart, consentEnd) : "";
+  assert.match(consent, /reconcileExternalAiAfterConsentFailure/);
+  assert.match(main, /onCancel:\(\)=>\{state\.processingDefaultDraft=null;\}/);
+  assert.match(main, /onCancel:\(\)=>\{state\.externalAiToggleDraft=false;\}/);
+  assert.match(main, /consentVersion:1/);
+});
+
+test("Weki installer keeps installation-folder copy on the program page and data-location copy on the data page", () => {
+  const programPage = installer.slice(installer.indexOf("Function WekiInstallDirPageCreate"), installer.indexOf("Function WekiDataPageCreate"));
+  const dataPage = installer.slice(installer.indexOf("Function WekiDataPageCreate"), installer.indexOf("Function WekiDataPageLeave"));
+  assert.match(programPage, /NSD_CreateGroupBox\} \$\{WEKI_FORM_GROUP_X\} \$\{WEKI_FORM_GROUP_Y\}[^\n]*"설치 폴더"/);
+  assert.match(dataPage, /NSD_CreateGroupBox\} \$\{WEKI_FORM_GROUP_X\} \$\{WEKI_FORM_GROUP_Y\}[^\n]*"문서 데이터 저장 위치"/);
+  assert.doesNotMatch(dataPage, /NSD_CreateGroupBox\}[^\n]*"설치 폴더"/);
+});
+
+test("Weki v1.2.3 documentation states the shipped onboarding and external-AI policy", () => {
+  assert.match(readme, /v1\.2\.3 현재 정책/);
+  assert.match(readme, /9단계/);
+  assert.match(readme, /사용 가이드/);
+  assert.match(readme, /실제 문서나 설정을 변경하지 않습니다/);
+  assert.match(readme, /설치된 모델 사용/);
+  assert.match(readme, /외부 AI 사용/);
+  assert.match(readme, /Gemini Key/);
+  assert.match(readme, /암호화/);
+  assert.match(readme, /OFF→ON/);
+  assert.match(readme, /12,000/);
+  assert.match(readme, /2 MiB/);
+  assert.match(readme, /8 MiB/);
+  assert.match(readme, /30초/);
+  assert.match(readme, /검색 보조 메타데이터/);
+  assert.match(readme, /최종 답변 생성/);
+  assert.match(prd, /9단계/);
+  assert.match(prd, /OFF→ON.*동의/s);
+  assert.match(prd, /auto.*Local AI/s);
+  assert.match(userTestChecklist, /desktop.*drag|데스크톱.*드래그/i);
+  assert.match(userTestChecklist, /mobile.*center|모바일.*중앙/i);
+  assert.match(userTestChecklist, /static.*example|정적.*예시/i);
+  assert.match(userTestChecklist, /Key.*화면에 다시 표시하지|Key.*비공개/i);
+  assert.match(userTestChecklist, /끄면 신규 작업|OFF.*신규 작업/i);
+  assert.match(releaseNotesV123, /외부 전송/);
+  assert.match(releaseNotesV123, /자동.*재생|자동.*다시/);
+  assert.match(releaseNotesV123, /최종 답변 생성/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {

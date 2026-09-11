@@ -148,7 +148,7 @@ Function WekiDataPageCreate
   ; Keep the editable row on the same vertical baseline as the built-in
   ; installation-directory page, even when this page's description is shorter.
   !insertmacro MUI_HEADER_TEXT "Weki 문서 데이터 저장 위치" "원본과 검색 색인을 저장할 폴더를 선택해 주세요."
-  ${NSD_CreateGroupBox} ${WEKI_FORM_GROUP_X} ${WEKI_FORM_GROUP_Y} ${WEKI_FORM_GROUP_W} ${WEKI_FORM_GROUP_H} "설치 폴더"
+  ${NSD_CreateGroupBox} ${WEKI_FORM_GROUP_X} ${WEKI_FORM_GROUP_Y} ${WEKI_FORM_GROUP_W} ${WEKI_FORM_GROUP_H} "문서 데이터 저장 위치"
   Pop $0
   ${NSD_CreateDirRequest} ${WEKI_FORM_INPUT_X} ${WEKI_FORM_INPUT_Y} ${WEKI_FORM_INPUT_W} ${WEKI_FORM_INPUT_H} "$WekiDataDir"
   Pop $WekiDataDirInput
