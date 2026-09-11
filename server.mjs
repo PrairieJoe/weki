@@ -197,21 +197,22 @@ const processingModeResolution = (mode) => {
 };
 const jobProcessingResolution = (job) => processingModeResolution(job?.processingPolicy || job);
 const effectiveProcessingMode = (mode) => processingModeResolution(mode).effectiveMode;
+const processingModeLabel = (effectiveMode) => effectiveMode === "local-ai" ? "Local AI" : effectiveMode === "external-ai" ? "External AI" : "경량 처리";
 const processingDetail = (mode, stage, completed = null, total = null) => {
   const resolution = processingModeResolution(mode);
   const effective = resolution.effectiveMode;
   const fallback = resolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. " : "";
   if (stage === "index") return `${fallback}${effective === "local-ai" ? "Local AI: E5 의미 임베딩과 Evidence 색인을 생성 중입니다." : effective === "external-ai" ? "External AI: 페이지별 검색 보강과 Evidence 색인을 생성 중입니다." : "경량 처리: Evidence 색인을 생성 중입니다."}`;
-  if (Number.isFinite(completed) && Number.isFinite(total)) return `${fallback}${effective === "local-ai" ? "Local AI" : effective === "external-ai" ? "External AI" : "경량 처리"} · ${completed}/${total} 페이지·슬라이드 처리 완료`;
+  if (Number.isFinite(completed) && Number.isFinite(total)) return `${fallback}${processingModeLabel(effective)} · ${completed}/${total} 페이지·슬라이드 처리 완료`;
   return `${fallback}${effective === "local-ai" ? "Local AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : effective === "external-ai" ? "External AI: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다." : "경량 처리: 원본을 보관하고 페이지별 텍스트·OCR을 추출 중입니다."}`;
 };
-async function checkpoint(jobId, completed, total, mode = "lightweight") {
+async function checkpoint(jobId, completed, total, processingResolution = "lightweight") {
   const db = await readDb(); const job = db.jobs.find((item) => item.id === jobId);
   if (!job || job.status === "cancelled") throw new JobInterrupted("cancelled");
   if (job.status === "paused") throw new JobInterrupted("paused");
   job.completedUnits = completed; job.totalUnits = total;
   job.progress = Math.max(1, Math.min(95, Math.round((completed / Math.max(1, total)) * 95)));
-  job.detail = processingDetail(mode, "extract", completed, total); await writeDb(db);
+  job.detail = processingDetail(processingResolution, "extract", completed, total); await writeDb(db);
 }
 const textOnly = (value) => value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
 const normalizeFilename = (name) => {
@@ -391,13 +392,13 @@ async function runQueue() {
       if (job.kind === "registration") {
         const modeResolution = jobProcessingResolution(job); job.status = "processing"; job.progress = 15; job.detail = processingDetail(modeResolution, "extract"); job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; await writeDb(db);
         try {
-          const buffer = await fs.readFile(job.stagedPath); const pages = await extract(buffer, job.ext, { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
+          const buffer = await fs.readFile(job.stagedPath); const pages = await extract(buffer, job.ext, { onUnit: (completed, total) => checkpoint(job.id, completed, total, modeResolution) });
           if (!pages.length) throw new Error("검색 가능한 텍스트를 추출하지 못했습니다.");
           const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (!freshJob || freshJob.status === "cancelled") { await fs.unlink(job.stagedPath).catch(() => {}); continue; }
           const originalName = normalizeOriginalName(job.name, `${job.hash}.${job.ext}`); const originalKey = `${job.hash}/${originalName}`; const originalPath = path.join(originalsDir, job.hash, originalName); await writeOriginalAtomically(originalPath, buffer); await fs.unlink(job.stagedPath).catch(() => {});
           const documentId = crypto.randomUUID(); const enriched = modeResolution.effectiveMode === "external-ai" ? await enrichExternalPages(pages, modeResolution, documentId) : { pages, audits: [], resolution: modeResolution }; const effectiveResolution = enriched.resolution; const pdfOcr = job.ext === "pdf"; const now = new Date().toISOString(); const units = makeUnits(enriched.pages); const metrics = buildPageMetrics(enriched.pages, units); const effectiveMode = effectiveResolution.effectiveMode; const format = job.ext.toUpperCase(); const doc = { id: documentId, name: job.name, originalName, format, hash: job.hash, originalKey, size: job.size, registeredAt: now, modifiedAt: job.modifiedAt, updatedAt: now, processingMode: effectiveMode, requestedProcessingMode: modeResolution.requestedMode, processingModeFallback: effectiveResolution.fallbackReason, processingPolicy: { requestedMode: modeResolution.requestedMode, effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: effectiveResolution.fallbackReason }, advancedAnalysis: effectiveMode === "local-ai", semanticAnalysisStatus: effectiveMode === "local-ai" ? "pending" : "degraded", rendererStatus: rendererAvailableForFormat(format) ? "ready" : "fallback", rendererVersion: rendererAvailableForFormat(format) ? rendererComponentVersion : null, ...metrics, sourceStatus: "local_available", nativeTextStatus: "success", ocrStatus: pdfOcr ? "success" : "unavailable", visualAnalysisStatus: metrics.visualEvidenceCount ? "success" : rendererAvailableForFormat(format) ? "unavailable" : "not_supported", units };
           fresh.documents.push(doc); freshJob.documentId = doc.id; freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.requestedProcessingMode = modeResolution.requestedMode; freshJob.processingModeFallback = effectiveResolution.fallbackReason; freshJob.processingPolicy = doc.processingPolicy; freshJob.detail = processingDetail(effectiveResolution, "index"); delete freshJob.stagedPath; fresh.audit.unshift(...enriched.audits.map((audit) => ({ id: crypto.randomUUID(), type: "external-ai", ...audit, processingModeFallback: effectiveResolution.fallbackReason }))); await writeDb(fresh); await syncDocumentToV2(doc);
-          const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === doc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${metrics.pageCount}개 페이지 처리 완료${metrics.failedPageCount ? ` · ${metrics.failedPageCount}개 페이지 검색 불가` : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = now; indexed.audit.unshift({ id: crypto.randomUUID(), type: "registration", documentId: doc.id, createdAt: now, detail: indexedJob.detail }); await writeDb(indexed); }
+          const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === doc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${processingModeLabel(effectiveMode)} · ${metrics.pageCount}개 페이지 처리 완료${metrics.failedPageCount ? ` · ${metrics.failedPageCount}개 페이지 검색 불가` : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = now; indexed.audit.unshift({ id: crypto.randomUUID(), type: "registration", documentId: doc.id, createdAt: now, detail: indexedJob.detail }); await writeDb(indexed); }
         } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); if (error.status === "cancelled") { await fs.unlink(freshJob.stagedPath || job.stagedPath).catch(() => {}); delete freshJob.stagedPath; } await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
         continue;
       }
@@ -406,12 +407,12 @@ async function runQueue() {
        try { originalPath = await ensureDocumentOriginal(doc); } catch (error) { job.status = "failed"; job.detail = error.message || "원본이 없어 재처리할 수 없습니다."; await writeDb(db); continue; }
       const modeResolution = jobProcessingResolution(job); job.status = "processing"; job.progress = 20; job.effectiveMode = modeResolution.effectiveMode; job.processingModeFallback = modeResolution.fallbackReason; job.detail = modeResolution.fallbackReason === "semantic_model_unavailable" ? "Local AI 모델이 준비되지 않아 경량 처리로 전환했습니다. 경량 처리: 기존 색인을 유지한 채 페이지별 텍스트·OCR을 재처리 중입니다." : processingDetail(modeResolution, "extract"); await writeDb(db);
       try {
-        const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total, job.mode) });
+        const pages = await extract(await fs.readFile(originalPath), doc.format.toLowerCase(), { onUnit: (completed, total) => checkpoint(job.id, completed, total, modeResolution) });
         const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); const freshDoc = fresh.documents.find((item) => item.id === job.documentId);
         if (!freshJob || freshJob.status === "cancelled") continue;
         const enriched = modeResolution.effectiveMode === "external-ai" ? await enrichExternalPages(pages, modeResolution, freshDoc.id) : { pages, audits: [], resolution: modeResolution }; const effectiveResolution = enriched.resolution; const pdfOcr = freshDoc.format === "PDF"; const effectiveMode = effectiveResolution.effectiveMode; freshDoc.processingMode = effectiveMode; freshDoc.requestedProcessingMode = modeResolution.requestedMode; freshDoc.processingModeFallback = effectiveResolution.fallbackReason; freshDoc.processingPolicy = { requestedMode: modeResolution.requestedMode, effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: effectiveResolution.fallbackReason }; freshDoc.advancedAnalysis = effectiveMode === "local-ai"; freshDoc.semanticAnalysisStatus = "pending"; freshDoc.rendererStatus = rendererAvailableForFormat(freshDoc.format) ? "ready" : "fallback"; freshDoc.rendererVersion = rendererAvailableForFormat(freshDoc.format) ? rendererComponentVersion : null; freshDoc.units = makeUnits(enriched.pages); Object.assign(freshDoc, buildPageMetrics(enriched.pages, freshDoc.units)); freshDoc.updatedAt = new Date().toISOString(); freshDoc.nativeTextStatus = "success"; freshDoc.ocrStatus = pdfOcr ? "success" : "unavailable"; freshDoc.visualAnalysisStatus = freshDoc.visualEvidenceCount ? "success" : rendererAvailableForFormat(freshDoc.format) ? "unavailable" : "not_supported";
         freshJob.status = "processing"; freshJob.progress = 96; freshJob.effectiveMode = effectiveMode; freshJob.requestedProcessingMode = modeResolution.requestedMode; freshJob.processingModeFallback = effectiveResolution.fallbackReason; freshJob.processingPolicy = freshDoc.processingPolicy; freshJob.detail = processingDetail(effectiveResolution, "index"); fresh.audit.unshift(...enriched.audits.map((audit) => ({ id: crypto.randomUUID(), type: "external-ai", ...audit, processingModeFallback: effectiveResolution.fallbackReason }))); await writeDb(fresh); await syncDocumentToV2(freshDoc);
-        const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === freshDoc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${indexedDoc.pageCount}개 페이지 재처리 완료${indexedDoc.failedPageCount ? ` · ${indexedDoc.failedPageCount}개 페이지 검색 불가` : ""}${pdfOcr ? " · OCR 완료" : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = new Date().toISOString(); indexed.audit.unshift({ id: crypto.randomUUID(), type: "reprocess", documentId: indexedDoc.id, createdAt: indexedJob.completedAt, detail: indexedJob.detail }); await writeDb(indexed); }
+        const indexed = await readDb(); const indexedJob = indexed.jobs.find((item) => item.id === job.id); const indexedDoc = indexed.documents.find((item) => item.id === freshDoc.id); if (indexedJob && indexedDoc) { indexedDoc.semanticAnalysisStatus = effectiveMode === "local-ai" ? "ready" : "degraded"; indexedJob.status = "completed"; indexedJob.progress = 100; indexedJob.detail = `${processingModeLabel(effectiveMode)} · ${indexedDoc.pageCount}개 페이지 재처리 완료${indexedDoc.failedPageCount ? ` · ${indexedDoc.failedPageCount}개 페이지 검색 불가` : ""}${pdfOcr ? " · OCR 완료" : ""}${effectiveMode === "local-ai" ? " · Local AI 의미 색인 완료" : ""}`; indexedJob.completedAt = new Date().toISOString(); indexed.audit.unshift({ id: crypto.randomUUID(), type: "reprocess", documentId: indexedDoc.id, createdAt: indexedJob.completedAt, detail: indexedJob.detail }); await writeDb(indexed); }
       } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
     }
   } finally { queueRunning = false; }
@@ -842,11 +843,23 @@ const SAFE_EXTERNAL_ERROR_CODES = new Set([
   "external_ai_invalid_response",
 ]);
 let externalApiKey = String(process.env.WEKI_GEMINI_API_KEY || "").trim();
+let externalCredentialSync = Promise.resolve();
 if (typeof process.on === "function") {
   process.on("message", (message) => {
     if (!message || message.type !== "weki:gemini-credential") return;
-    if (message.apiKey !== null && typeof message.apiKey !== "string") return;
-    externalApiKey = String(message.apiKey || "").trim();
+    if (Object.hasOwn(message, "apiKey") && message.apiKey !== null && typeof message.apiKey !== "string") return;
+    externalCredentialSync = externalCredentialSync.then(async () => {
+      if (Object.hasOwn(message, "apiKey")) externalApiKey = String(message.apiKey || "").trim();
+      try {
+        const db = await readDb();
+        const external = externalSettings(db.settings);
+        external.lastConnection = { status: "unknown", checkedAt: null, errorCode: null };
+        db.settings = { ...(db.settings || {}), externalAi: external };
+        await writeDb(db);
+      } catch {}
+      try { if (typeof process.send === "function") process.send({ type: "weki-gemini-credential-applied" }); } catch {}
+    }).catch(() => {});
+    void externalCredentialSync;
   });
 }
 const externalProviderBaseUrl = process.env.WEKI_GEMINI_API_BASE_URL || process.env.WEKI_GEMINI_API_BASE || undefined;

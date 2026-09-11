@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
@@ -10,9 +11,18 @@ import { createAiCredentialsStore } from "../src/server/ai-credentials.mjs";
 import JSZip from "jszip";
 
 let nextPort = 5450;
-async function startServer(t, env = {}, initialDatabase = null, { useIpc = false } = {}) {
+async function startServer(t, env = {}, initialDatabase = null, { useIpc = false, initialFiles = [] } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-ai-settings-api-"));
-  if (initialDatabase) await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify(initialDatabase));
+  if (initialDatabase) {
+    const seededDatabase = JSON.parse(JSON.stringify(initialDatabase));
+    for (const job of seededDatabase.jobs || []) if (typeof job.stagedPath === "string" && job.stagedPath.startsWith("$DATA_DIR/")) job.stagedPath = path.join(dataDir, job.stagedPath.slice("$DATA_DIR/".length));
+    await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify(seededDatabase));
+  }
+  for (const [relativePath, contents] of initialFiles) {
+    const target = path.join(dataDir, relativePath);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, contents);
+  }
   const port = nextPort++;
   const child = spawn(process.execPath, ["server.mjs"], { cwd: path.resolve("."), env: { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_PORT: String(port), WEKI_DISABLE_ENV_FILE: "1", WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1", ...env }, stdio: useIpc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"] });
   let output = "";
@@ -33,7 +43,17 @@ const testSafeStorage = {
   decryptString: (value) => Buffer.from(value.toString("utf8"), "base64").toString("utf8"),
 };
 const sendStoredCredential = (child, apiKey) => new Promise((resolve, reject) => {
-  child.send({ type: "weki:gemini-credential", apiKey }, (error) => error ? reject(error) : resolve());
+  let settled = false;
+  const finish = (error) => {
+    if (settled) return;
+    settled = true;
+    child.removeListener("message", onMessage);
+    if (error) reject(error); else resolve();
+  };
+  const onMessage = (message) => { if (message?.type === "weki-gemini-credential-applied") finish(); };
+  child.on("message", onMessage);
+  try { child.send({ type: "weki:gemini-credential", apiKey }, (error) => { if (error) finish(error); }); }
+  catch (error) { finish(error); }
 });
 async function docxFixture(text = "external enrichment fixture") {
   const zip = new JSZip();
@@ -104,6 +124,90 @@ test("model and connection routes omit raw provider responses and document bodie
   assert.doesNotMatch(JSON.stringify({ patch: patch.body, models: models.body, check: check.body }), /AIza-provider-response-secret|ping response/);
 });
 
+test("credential reload clears a persisted external connection status without exposing the key", async (t) => {
+  const secret = "AIza-credential-reload-secret";
+  const server = await startServer(t, {}, {
+    settings: {
+      defaultProcessingMode: "external-ai",
+      externalAi: {
+        modelId: "gemini-test",
+        consentVersion: 1,
+        lastConnection: { status: "ready", checkedAt: "2026-09-11T00:00:00.000Z", errorCode: null },
+      },
+    },
+    documents: [], jobs: [], audit: [],
+  }, { useIpc: true });
+  const credentialStore = createAiCredentialsStore({ filePath: path.join(server.dataDir, "credentials", "gemini-api-key.json"), safeStorage: testSafeStorage });
+  await credentialStore.saveApiKey(secret);
+  await sendStoredCredential(server.child, await credentialStore.getApiKeyForServer());
+
+  const result = await json(await fetch(`http://127.0.0.1:${server.port}/api/settings`));
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.externalAi.configured, true);
+  assert.equal(result.body.externalAi.ready, false);
+  assert.equal(result.body.externalAi.lastConnection.status, "unknown");
+  assert.equal(result.body.settings.externalAi.lastConnection.status, "unknown");
+  assert.doesNotMatch(JSON.stringify(result.body), new RegExp(secret));
+  const stored = JSON.parse(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"));
+  assert.equal(stored.settings.externalAi.lastConnection.status, "unknown");
+  assert.doesNotMatch(JSON.stringify(stored), new RegExp(secret));
+});
+
+test("legacy queued jobs execute from mode when no processing policy snapshot exists", async (t) => {
+  const localBytes = await docxFixture("legacy local ai page");
+  const lightweightBytes = await docxFixture("legacy lightweight page");
+  const fallbackBytes = await docxFixture("snapshotted fallback page");
+  const server = await startServer(t, {}, {
+    settings: {},
+    documents: [],
+    jobs: [
+      { id: "legacy-local-job", kind: "registration", name: "legacy-local.docx", mode: "local-ai", status: "queued", progress: 0, hash: "legacy-local-hash", ext: "docx", size: localBytes.length, stagedPath: "$DATA_DIR/incoming/legacy-local.docx", createdAt: "2026-09-11T00:00:00.000Z" },
+      { id: "legacy-lightweight-job", kind: "registration", name: "legacy-lightweight.docx", mode: "lightweight", status: "queued", progress: 0, hash: "legacy-lightweight-hash", ext: "docx", size: lightweightBytes.length, stagedPath: "$DATA_DIR/incoming/legacy-lightweight.docx", createdAt: "2026-09-11T00:00:01.000Z" },
+      { id: "snapshotted-fallback-job", kind: "registration", name: "snapshotted-fallback.docx", mode: "external-ai", processingPolicy: { requestedMode: "external-ai", effectiveMode: "lightweight", provider: null, modelId: null, fallbackReason: "external_ai_not_configured" }, status: "queued", progress: 0, hash: "snapshotted-fallback-hash", ext: "docx", size: fallbackBytes.length, stagedPath: "$DATA_DIR/incoming/snapshotted-fallback.docx", createdAt: "2026-09-11T00:00:02.000Z" },
+    ],
+    audit: [],
+  }, { initialFiles: [["incoming/legacy-local.docx", localBytes], ["incoming/legacy-lightweight.docx", lightweightBytes], ["incoming/snapshotted-fallback.docx", fallbackBytes]] });
+  const database = await waitForDatabase(server.dataDir, (value) => value.documents.length === 3 && value.jobs.every((job) => job.status === "completed"), 25_000);
+  const localDocument = database.documents.find((document) => document.name === "legacy-local.docx");
+  const lightweightDocument = database.documents.find((document) => document.name === "legacy-lightweight.docx");
+  const fallbackDocument = database.documents.find((document) => document.name === "snapshotted-fallback.docx");
+  const localJob = database.jobs.find((job) => job.id === "legacy-local-job");
+  const lightweightJob = database.jobs.find((job) => job.id === "legacy-lightweight-job");
+  const fallbackJob = database.jobs.find((job) => job.id === "snapshotted-fallback-job");
+
+  assert.equal(localDocument.processingPolicy.requestedMode, "local-ai");
+  assert.equal(localDocument.processingMode, "lightweight");
+  assert.equal(localDocument.processingModeFallback, "semantic_model_unavailable");
+  assert.equal(localJob.requestedProcessingMode, "local-ai");
+  assert.equal(localJob.processingModeFallback, "semantic_model_unavailable");
+  assert.equal(lightweightDocument.processingPolicy.requestedMode, "lightweight");
+  assert.equal(lightweightDocument.processingMode, "lightweight");
+  assert.equal(lightweightJob.requestedProcessingMode, "lightweight");
+  assert.equal(fallbackDocument.processingPolicy.requestedMode, "external-ai");
+  assert.equal(fallbackDocument.processingPolicy.effectiveMode, "lightweight");
+  assert.equal(fallbackDocument.processingModeFallback, "external_ai_not_configured");
+  assert.match(fallbackJob.detail, /^경량 처리/);
+});
+
+test("reprocess progress uses the snapshotted effective mode", async (t) => {
+  const bytes = await docxFixture("reprocess snapshot page");
+  const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+  const name = "reprocess-snapshot.docx";
+  const server = await startServer(t, {}, {
+    settings: {},
+    documents: [{ id: "reprocess-snapshot-document", name, originalName: name, format: "DOCX", hash, originalKey: `${hash}/${name}`, sourceStatus: "local_available", processingStatus: "completed", units: [{ id: "old-unit", range: 1, text: "old text" }] }],
+    jobs: [{ id: "reprocess-snapshot-job", kind: "reprocess", name, documentId: "reprocess-snapshot-document", mode: "external-ai", processingPolicy: { requestedMode: "external-ai", effectiveMode: "lightweight", provider: null, modelId: null, fallbackReason: "external_ai_not_configured" }, status: "queued", progress: 0, createdAt: "2026-09-11T00:00:00.000Z" }],
+    audit: [],
+  }, { initialFiles: [[`originals/${hash}/${name}`, bytes]] });
+  const database = await waitForDatabase(server.dataDir, (value) => value.jobs.some((job) => job.id === "reprocess-snapshot-job" && job.status === "completed"), 25_000);
+  const document = database.documents.find((item) => item.id === "reprocess-snapshot-document");
+  const job = database.jobs.find((item) => item.id === "reprocess-snapshot-job");
+
+  assert.equal(document.processingPolicy.effectiveMode, "lightweight");
+  assert.equal(document.processingModeFallback, "external_ai_not_configured");
+  assert.match(job.detail, /^경량 처리/);
+});
+
 test("explicit external document registration requires consent before queueing", async (t) => {
   const server = await startServer(t);
   const form = new FormData();
@@ -117,14 +221,14 @@ test("explicit external document registration requires consent before queueing",
   assert.deepEqual(stored.jobs, []);
 });
 
-async function waitForDatabase(dataDir, predicate, timeoutMs = 15_000) {
+async function waitForDatabase(dataDir, predicate, timeoutMs = 15_000, intervalMs = 100) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const database = JSON.parse(await fs.readFile(path.join(dataDir, "knowledge-base.json"), "utf8"));
       if (predicate(database)) return database;
     } catch {}
-    await delay(100);
+    await delay(intervalMs);
   }
   throw new Error("database did not reach the expected processing state");
 }

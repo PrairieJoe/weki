@@ -39,3 +39,21 @@ Fix-round tests:
     PASS (49/51); 2 unrelated existing failures
 
 The prescribed run's failures are the existing missing `test_data/01 시내버스 개편 방향 및 효과, 개편사항.pdf` fixture and a Windows `EPERM` rename race in `ordered runtime install uses bundled transport after the default manifest is persisted`.
+
+## Task 5 fix round 2 — scoped P2 findings
+
+- Queue extraction checkpoints now receive the snapshotted `modeResolution` for both registration and reprocess flows. Progress and completion details therefore describe the effective Local AI/lightweight mode when an External AI request has fallen back, rather than using the requested `job.mode`.
+- Credential delivery now clears persisted `externalAi.lastConnection` before acknowledging the private main→server update. A newly saved/replaced key must be checked again before the provider is reported ready; no plaintext key is included in the acknowledgment or public responses.
+- Added focused server coverage for credential reload invalidation, executed legacy queued registration jobs without `processingPolicy`, effective-mode formatting for registration/reprocess snapshots, and server-side Local AI→lightweight fallback. The test environment has no valid semantic runtime pack, so it verifies the safe `semantic_model_unavailable`/lightweight fallback; an actual External→Local AI run requires installing a real model pack and is intentionally not faked.
+
+Fix-round focused tests:
+
+    node --test test/ai-credentials.test.mjs test/processing-settings.test.mjs test/ai-settings-api.test.mjs
+    PASS (29/29)
+
+Fix-round prescribed server contract command:
+
+    node --test test/processing-settings.test.mjs test/ai-settings-api.test.mjs test/search-v2-api.test.mjs
+    PASS (52/54); 2 unrelated existing environment failures
+
+The prescribed run's failures are a concurrent search-server readiness timeout and the missing `test_data/01 시내버스 개편 방향 및 효과, 개편사항.pdf` fixture.

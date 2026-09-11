@@ -73,9 +73,24 @@ const sendStoredGeminiKeyToServer = async () => {
   if (!server || !server.connected || !activeDataDir) return false;
   let apiKey = null;
   try { apiKey = await (await aiCredentialStore()).getApiKeyForServer(); } catch {}
+  const message = { type: 'weki:gemini-credential' };
+  if (apiKey) message.apiKey = apiKey;
   return new Promise((resolve) => {
-    try { server.send({ type: 'weki:gemini-credential', apiKey }, (error) => resolve(!error)); }
-    catch { resolve(false); }
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), 2000);
+    const finish = (success) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      server.removeListener('message', onMessage);
+      resolve(success);
+    };
+    const onMessage = (received) => {
+      if (received?.type === 'weki-gemini-credential-applied') finish(true);
+    };
+    server.on('message', onMessage);
+    try { server.send(message, (error) => { if (error) finish(false); }); }
+    catch { finish(false); }
   });
 };
 const serverIsReady = async () => { try { return (await fetch(`${appUrl}/api/status`)).ok; } catch { return false; } };
