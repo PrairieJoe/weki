@@ -345,6 +345,38 @@ test("Weki never interpolates a Gemini Key into rendered HTML or status state", 
   assert.doesNotMatch(credentialUi, /innerHTML[^;]*apiKey/);
   assert.match(credentialUi, /input\.value=""/);
   assert.match(credentialUi, /getGeminiStatus/);
+  assert.match(credentialUi, /gemini-key-message/);
+  assert.match(credentialUi, /setAttribute\("role","status"\)/);
+  assert.match(credentialUi, /setAttribute\("aria-live","polite"\)/);
+});
+
+test("Weki rolls back consent UI on backdrop dismissal and rejected consent PATCH", () => {
+  const dismissalStart = main.indexOf('document.addEventListener("keydown"');
+  const dismissalEnd = main.indexOf("refresh().then", dismissalStart);
+  const dismissal = dismissalStart >= 0 && dismissalEnd >= 0 ? main.slice(dismissalStart, dismissalEnd) : "";
+  assert.match(dismissal, /data-dialog-backdrop/);
+  assert.match(dismissal, /dismissDialog\(\)/);
+  assert.match(dismissal, /event\.target===backdrop/);
+  assert.match(main, /function dismissDialog\(\)/);
+
+  const rollbackStart = main.indexOf("async function reconcileExternalAiAfterConsentFailure");
+  const rollbackEnd = main.indexOf("function requestExternalAiConsent", rollbackStart);
+  const rollback = rollbackStart >= 0 && rollbackEnd >= 0 ? main.slice(rollbackStart, rollbackEnd) : "";
+  assert.match(rollback, /processingDefaultDraft="installed-model"/);
+  assert.match(rollback, /externalAiToggleDraft=false/);
+  assert.match(rollback, /await refresh\(\)\.catch/);
+  const defaultSaveStart = main.indexOf("async function saveProcessingDefault");
+  const defaultSaveEnd = main.indexOf("function syncDefaultProcessingMode", defaultSaveStart);
+  const defaultSave = defaultSaveStart >= 0 && defaultSaveEnd >= 0 ? main.slice(defaultSaveStart, defaultSaveEnd) : "";
+  assert.match(defaultSave, /if\(consent\)await reconcileExternalAiAfterConsentFailure\(\)/);
+
+  const consentStart = main.indexOf("function requestExternalAiConsent");
+  const consentEnd = main.indexOf("function externalEnabled", consentStart);
+  const consent = consentStart >= 0 && consentEnd >= 0 ? main.slice(consentStart, consentEnd) : "";
+  assert.match(consent, /reconcileExternalAiAfterConsentFailure/);
+  assert.match(main, /onCancel:\(\)=>\{state\.processingDefaultDraft=null;\}/);
+  assert.match(main, /onCancel:\(\)=>\{state\.externalAiToggleDraft=false;\}/);
+  assert.match(main, /consentVersion:1/);
 });
 
 test("Weki installer keeps installation-folder copy on the program page and data-location copy on the data page", () => {

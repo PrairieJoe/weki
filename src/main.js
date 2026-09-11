@@ -8,6 +8,7 @@ const APP_VERSION = packageJson.version;
 let docs = [];
 let onboardingController;
 const MYBOX_RUNTIME_CACHE_TTL = 30_000;
+let geminiCredentialMessage = "";
 const state = { page: "search", query: "", apiResults: [], searchCursor: null, searchHasMore: false, jobs: [], selectedFiles: [], status: null, settings: null, documentModeDraft: null, processingDefaultDraft: null, externalAiToggleDraft: null, geminiModels: [], geminiModelsLoaded: false, geminiConnectionStatus: null, mybox: { connected: false, backups: [] }, myboxLoaded: false, myboxRuntime: null, myboxRuntimeFetchedAt: 0, myboxRuntimePromise: null, myboxRendererInstalling: false, searchSessionId: null, rankingVersion: null, searchAbortController: null, runtimeLoading: false, runtime: null, runtimePollTimer: null, runtimeBatchRequested: false, runtimeRestartTimer: null, toast: "", dialog: null, loading: false, expandedEvidence: new Set() };
 const icons = { search:"⌕", add:"＋", docs:"▤", settings:"⚙", spark:"✦", arrow:"→", close:"×", pause:"Ⅱ", play:"▶", more:"⋯", file:"▧", check:"✓", alert:"!" };
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -71,6 +72,7 @@ async function uploadFiles(){ const input=document.querySelector("#file-input");
 async function restartApp(){ state.toast="Weki를 다시 시작하는 중입니다…"; render(); try{if(window.wekiApp?.restart){await window.wekiApp.restart();return;} location.reload();}catch{state.toast="자동 재시작을 실행하지 못했습니다. 창을 닫고 Weki를 다시 열어 주세요.";render();} }
 function openDialog(title,message,onConfirm,onCancel){state.dialog={title,message,onConfirm,onCancel};render();document.querySelector(".dialog")?.focus();}
 async function confirmDialogAction(){const action=state.dialog?.onConfirm;state.dialog=null;render();try{await action?.();}catch(error){state.toast=error.message||"작업에 실패했습니다.";}finally{render();}}
+function dismissDialog(){const onCancel=state.dialog?.onCancel;state.dialog=null;onCancel?.();render();}
 document.addEventListener("click",(event)=>{if(event.target.closest("#restart-app"))void restartApp();});
 document.addEventListener("click",(event)=>{if(event.target.closest("[data-runtime-install]"))startRuntimePolling();});
 function bind(){ document.querySelector("[data-onboarding-replay]")?.addEventListener("click",()=>void onboardingController?.start({replay:true})); document.querySelectorAll("[data-nav]").forEach((el)=>el.onclick=async()=>{state.page=el.dataset.nav;await refresh().catch(()=>{});render()});document.querySelectorAll("[data-query]").forEach((el)=>el.onclick=async()=>{state.query=el.dataset.query;await runSearch()});document.querySelector("#run-search")?.addEventListener("click",runSearch);document.querySelector("#query")?.addEventListener("keydown",(event)=>{if(event.key==="Enter")runSearch()});document.querySelector("#choose-files")?.addEventListener("click",()=>document.querySelector("#file-input")?.click());document.querySelector("#create-job")?.addEventListener("click",uploadFiles);document.querySelectorAll("[data-close-toast]").forEach((el)=>el.onclick=()=>{state.toast="";render()});document.querySelectorAll("[data-toast]").forEach((el)=>el.onclick=()=>{state.toast=el.dataset.toast;render()});document.querySelectorAll("[data-feedback]").forEach((el)=>el.onclick=async()=>{const response=await fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:state.query,documentId:el.dataset.feedback,helpful:el.dataset.helpful!=="false"})});state.toast=response.ok?"검색 피드백을 기록했어요":"피드백 기록에 실패했습니다.";render()});document.querySelectorAll("[data-job]").forEach((el)=>el.onclick=async()=>{const response=await fetch(`/api/jobs/${el.dataset.id}/action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:el.dataset.job})});state.toast=response.ok?"작업 상태를 업데이트했습니다.":"작업 상태를 업데이트하지 못했습니다.";await refresh();render()});document.querySelectorAll("[data-reprocess]").forEach((el)=>el.onclick=async()=>{const response=await fetch(`/api/documents/${el.dataset.reprocess}/reprocess`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"lightweight"})});state.toast=response.ok?"기존 검색 결과를 유지한 채 재처리 작업을 시작했습니다.":"재처리를 시작하지 못했습니다.";await refresh();render()});document.querySelectorAll("[data-delete]").forEach((el)=>el.onclick=()=>openDialog("문서를 삭제할까요?","문서와 검색 데이터가 삭제됩니다. 처리 중인 문서는 삭제할 수 없습니다.",async()=>{await fetch(`/api/documents/${el.dataset.delete}`,{method:"DELETE"});state.dialog=null;await refresh();state.toast="문서와 검색 데이터가 삭제되었습니다.";render()}));document.querySelector("#delete-all-data")?.addEventListener("click",()=>{const confirmation=document.querySelector("#delete-confirmation")?.value||"";if(confirmation!=="DELETE ALL DOCUMENTS"){state.toast="확인 문구가 일치하지 않습니다.";render();return;}openDialog("전체 데이터를 영구 삭제할까요?","문서·검색 데이터·내부 원본을 모두 제거하며 되돌릴 수 없습니다.",async()=>{const response=await fetch("/api/data",{method:"DELETE",headers:{"x-weki-confirmation":confirmation}});if(!response.ok)throw new Error("전체 데이터 삭제에 실패했습니다.");state.toast="전체 문서 데이터가 삭제되었습니다.";await refresh().catch(()=>{});})});document.querySelector("[data-dialog-cancel]")?.addEventListener("click",()=>{state.dialog=null;render()});document.querySelector("[data-dialog-confirm]")?.addEventListener("click",()=>void confirmDialogAction());document.querySelector("[data-dialog-backdrop]")?.addEventListener("click",(event)=>{if(event.target===event.currentTarget){state.dialog=null;render()}}); }
@@ -181,7 +183,7 @@ async function saveProcessingDefault(defaultProcessingMode,{consent=false}={}){
   const body={defaultProcessingMode};
   if(consent)body.externalAi={consentVersion:1,consentedAt:new Date().toISOString()};
   try{ await patchSettings(body); state.processingDefaultDraft=null; state.externalAiToggleDraft=null; state.toast="기본 처리 모드를 저장했습니다."; render(); }
-  catch(error){ state.toast=error.message||"기본 처리 모드를 저장하지 못했습니다."; render(); }
+  catch(error){ if(consent)await reconcileExternalAiAfterConsentFailure(); state.toast=error.message||"기본 처리 모드를 저장하지 못했습니다."; render(); }
 }
 function syncDefaultProcessingMode(){
   if(state.page!=="settings")return;
@@ -194,8 +196,24 @@ async function saveExternalConsent(){
   const consentedAt=new Date().toISOString();
   await patchSettings({externalAi:{consentVersion:1,consentedAt}});
 }
-function requestExternalAiConsent({onConfirm,onCancel,saveConsent=true}={}){
-  openDialog("외부 AI 사용에 동의할까요?",consentMessage(),async()=>{ if(saveConsent)await saveExternalConsent(); await onConfirm?.(); },onCancel);
+async function reconcileExternalAiAfterConsentFailure(){
+  state.processingDefaultDraft="installed-model";
+  state.externalAiToggleDraft=false;
+  await refresh().catch(()=>{});
+  if(state.status?.processing?.defaultMode!=="external-ai")state.processingDefaultDraft=null;
+  if(!externalStatus().enabled)state.externalAiToggleDraft=null;
+}
+function requestExternalAiConsent({onConfirm,onCancel,onFailure,saveConsent=true}={}){
+  openDialog("외부 AI 사용에 동의할까요?",consentMessage(),async()=>{
+    try{
+      if(saveConsent)await saveExternalConsent();
+      await onConfirm?.();
+    }catch(error){
+      onFailure?.();
+      await reconcileExternalAiAfterConsentFailure();
+      throw error;
+    }
+  },onCancel);
 }
 function externalEnabled(){ return state.externalAiToggleDraft??Boolean(externalStatus().enabled||currentDefaultMode()==="external-ai"); }
 async function handleDefaultProcessingModeChange(mode){
@@ -242,15 +260,25 @@ async function checkGeminiConnection(){
 }
 function syncGeminiCredentialEditor(){
   if(state.page!=="settings")return;
-  const input=document.querySelector("#gemini-api-key"),saveButton=document.querySelector("#save-gemini-key"),clearButton=document.querySelector("#clear-gemini-key"),message=document.querySelector("#gemini-key-message"); if(!input||!saveButton||!clearButton)return;
+  const input=document.querySelector("#gemini-api-key"),saveButton=document.querySelector("#save-gemini-key"),clearButton=document.querySelector("#clear-gemini-key"); if(!input||!saveButton||!clearButton)return;
+  let message=document.querySelector("#gemini-key-message");
+  if(!message){
+    message=document.createElement("p");
+    message.id="gemini-key-message";
+    message.className="muted";
+    message.setAttribute("role","status");
+    message.setAttribute("aria-live","polite");
+    clearButton.parentElement?.after(message);
+  }
+  message.textContent=geminiCredentialMessage;
   let draftKey="";
   input.value="";
-  input.addEventListener("input",()=>{draftKey=input.value;});
+  input.addEventListener("input",()=>{draftKey=input.value;geminiCredentialMessage="";message.textContent="";});
   const bridge=window.wekiAiCredentials;
-  if(!bridge){saveButton.disabled=true;clearButton.disabled=true;if(message)message.textContent="설치된 Weki 앱에서만 Gemini Key를 관리할 수 있습니다.";return;}
+  if(!bridge){saveButton.disabled=true;clearButton.disabled=true;geminiCredentialMessage="설치된 Weki 앱에서만 Gemini Key를 관리할 수 있습니다.";message.textContent=geminiCredentialMessage;return;}
   const credentialStatusPromise=window.wekiAiCredentials.getGeminiStatus?.(); if(credentialStatusPromise?.catch)void credentialStatusPromise.catch(()=>{});
-  saveButton.addEventListener("click",async()=>{saveButton.disabled=true;clearButton.disabled=true;if(message)message.textContent="Key를 이 PC에 암호화하여 저장하는 중…";try{await window.wekiAiCredentials.saveGeminiKey(draftKey);draftKey="";input.value="";if(message)message.textContent="Gemini Key를 저장했습니다. 연결 확인은 별도로 실행하세요.";await refresh();render();}catch(error){if(message)message.textContent=error.message||"Gemini Key 저장에 실패했습니다.";}finally{saveButton.disabled=false;clearButton.disabled=false;}});
-  clearButton.addEventListener("click",async()=>{saveButton.disabled=true;clearButton.disabled=true;if(message)message.textContent="저장된 Gemini Key를 삭제하는 중…";try{await window.wekiAiCredentials.clearGeminiKey();draftKey="";input.value="";state.geminiConnectionStatus=null;if(message)message.textContent="저장된 Gemini Key를 삭제했습니다. 외부 AI는 설치된 모델, 경량 처리 순으로 fallback합니다.";await refresh();render();}catch(error){if(message)message.textContent=error.message||"Gemini Key 삭제에 실패했습니다.";}finally{saveButton.disabled=false;clearButton.disabled=false;}});
+  saveButton.addEventListener("click",async()=>{saveButton.disabled=true;clearButton.disabled=true;geminiCredentialMessage="Key를 이 PC에 암호화하여 저장하는 중…";message.textContent=geminiCredentialMessage;try{await window.wekiAiCredentials.saveGeminiKey(draftKey);draftKey="";input.value="";geminiCredentialMessage="Gemini Key를 저장했습니다. 연결 확인은 별도로 실행하세요.";message.textContent=geminiCredentialMessage;await refresh();render();}catch(error){geminiCredentialMessage=error.message||"Gemini Key 저장에 실패했습니다.";message.textContent=geminiCredentialMessage;}finally{saveButton.disabled=false;clearButton.disabled=false;}});
+  clearButton.addEventListener("click",async()=>{saveButton.disabled=true;clearButton.disabled=true;geminiCredentialMessage="저장된 Gemini Key를 삭제하는 중…";message.textContent=geminiCredentialMessage;try{await window.wekiAiCredentials.clearGeminiKey();draftKey="";input.value="";state.geminiConnectionStatus=null;geminiCredentialMessage="저장된 Gemini Key를 삭제했습니다. 외부 AI는 설치된 모델, 경량 처리 순으로 fallback합니다.";message.textContent=geminiCredentialMessage;await refresh();render();}catch(error){geminiCredentialMessage=error.message||"Gemini Key 삭제에 실패했습니다.";message.textContent=geminiCredentialMessage;}finally{saveButton.disabled=false;clearButton.disabled=false;}});
 }
 function syncGeminiSettings(){
   if(state.page!=="settings")return;
@@ -373,7 +401,7 @@ function syncMockControls(){
     if(defaultInput&&!document.querySelector('input[name="mode"]:checked')?.dataset.userSelected)defaultInput.checked=true;
     const previousMode=currentDocumentMode();
     document.querySelectorAll('input[name="mode"]').forEach((input)=>{
-      input.onchange=()=>{ input.dataset.userSelected="true"; state.documentModeDraft=input.value; if(input.value==="external-ai"&&externalConsentVersion()!==1){ requestExternalAiConsent({onConfirm:()=>{state.documentModeDraft="external-ai";render();},onCancel:()=>{state.documentModeDraft=previousMode;}}); } };
+      input.onchange=()=>{ input.dataset.userSelected="true"; state.documentModeDraft=input.value; if(input.value==="external-ai"&&externalConsentVersion()!==1){ requestExternalAiConsent({onConfirm:()=>{state.documentModeDraft="external-ai";render();},onCancel:()=>{state.documentModeDraft=previousMode;},onFailure:()=>{state.documentModeDraft=previousMode;}}); } };
       const enabled=input.value==="lightweight"||input.value==="external-ai"||(input.value==="local-ai"&&semanticReady);
       input.disabled=!enabled;
       const mode=input.closest(".mode");
@@ -509,8 +537,8 @@ document.addEventListener("click",async(event)=>{
   event.preventDefault(); button.dataset.busy="true"; state.toast=button.dataset.sourceStatus==="cloud_available"?"MYBOX에서 원본을 가져오는 중…":"원본을 여는 중…"; render();
   try { const response=await fetch(`/api/documents/${encodeURIComponent(button.dataset.openOriginal)}/original`); if(!response.ok){let data={};try{data=await response.json()}catch{} throw new Error(data.error||"원본을 사용할 수 없습니다.");} const blob=await response.blob(); const link=document.createElement("a"); link.href=URL.createObjectURL(blob); link.download=decodeURIComponent(response.headers.get("Content-Disposition")?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]||"")||"원본 파일"; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href); state.toast="원본을 다운로드했습니다."; } catch(error){state.toast=error.message||"원본을 열지 못했습니다.";} render();
 });
-document.addEventListener("keydown",(event)=>{if(event.key==="Escape"&&state.dialog){state.dialog.onCancel?.();state.dialog=null;render()}});
-document.addEventListener("click",(event)=>{if(!event.target.closest?.("[data-dialog-cancel]")||!state.dialog)return;state.dialog.onCancel?.();state.dialog=null;render();event.stopImmediatePropagation();},true);
+document.addEventListener("keydown",(event)=>{if(event.key==="Escape"&&state.dialog){dismissDialog()}});
+document.addEventListener("click",(event)=>{if(!state.dialog)return;const cancel=event.target.closest?.("[data-dialog-cancel]"),backdrop=event.target.closest?.("[data-dialog-backdrop]");if(!cancel&&!(backdrop&&event.target===backdrop))return;dismissDialog();event.stopImmediatePropagation();},true);
 refresh().then(()=>{render();const start=()=>void onboardingController?.autoStart();if(typeof window.requestAnimationFrame==="function")window.requestAnimationFrame(start);else setTimeout(start,0);}).catch(()=>{state.toast="로컬 저장소 연결에 실패했습니다.";render()});
 let refreshInFlight = false;
 setInterval(async () => {

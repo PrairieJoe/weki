@@ -24,3 +24,24 @@ Verification:
     55 passed, 2 pre-existing failures
 
 The two failures are the existing Task 7 onboarding assertions for the missing `registration-screen` target/copy. They are outside Task 6 and were not changed.
+
+## Task 6 fix round 1 (base `78fd497`)
+
+- Unified consent cancellation through `dismissDialog()`. Cancel-button, backdrop, and Escape dismissal now invoke the dialog's `onCancel` rollback before rendering, including per-document mode rollback.
+- Added consent-PATCH failure reconciliation: processing mode and External AI drafts are forced OFF, `/api` settings are re-read, and the UI cannot leave a rejected ON state visible.
+- Added the rendered `#gemini-key-message` status region with `role="status"` and `aria-live="polite"`. Credential success/error text is retained across refresh renders without retaining the Key.
+- Added focused UI contract coverage for backdrop cancellation, rejected consent PATCH rollback, and accessible credential feedback.
+
+Fix-round verification:
+
+    node --test --test-name-pattern="(Task 6|Gemini Key|consent UI)" test/ui-contract.test.mjs
+    PASS (3/3 matching tests)
+
+    node --test test/processing-settings.test.mjs
+    PASS (10/10)
+
+    npm run build
+    PASS
+
+    git diff --check
+    PASS
