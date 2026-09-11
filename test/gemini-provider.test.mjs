@@ -41,7 +41,10 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
   assert.equal(requests[0].options.body, undefined);
   assert.deepEqual(requests[1].body.contents, [{ role: "user", parts: [{ text: "ping" }] }]);
   assert.doesNotMatch(JSON.stringify(requests[1].body), /secret-api-key|page text|document/i);
-  assert.deepEqual(requests[2].body.contents[0].parts, [
+  assert.match(requests[2].body.contents[0].parts[0].text, /return JSON/i);
+  assert.match(requests[2].body.contents[0].parts[0].text, /summary.*topic.*keywords.*visualDescriptions/i);
+  assert.doesNotMatch(requests[2].body.contents[0].parts[0].text, /page text|document|nativeText|ocrText/i);
+  assert.deepEqual(requests[2].body.contents[0].parts.slice(1), [
     { text: "page text" },
     { inlineData: { mimeType: "image/png", data: "allowed" } },
   ]);
@@ -99,8 +102,8 @@ test("Gemini provider caps serialized text and image payloads and reports exclud
 
   await provider.enrichPage({ page: { id: "page-1" }, text: "x".repeat(maxText + 5), images });
   const parts = requests[0].body.contents[0].parts;
-  assert.equal(parts[0].text.length, maxText);
-  const serializedImages = parts.slice(1).map((part) => part.inlineData.data);
+  assert.equal(parts[1].text.length, maxText);
+  const serializedImages = parts.slice(2).map((part) => part.inlineData.data);
   assert.equal(serializedImages.length, 4);
   assert.ok(serializedImages.every((data) => Buffer.from(data, "base64").byteLength <= maxImageBytes));
   assert.equal(serializedImages.reduce((total, data) => total + Buffer.from(data, "base64").byteLength, 0), GEMINI_MAX_TOTAL_IMAGE_BYTES);
@@ -116,6 +119,38 @@ test("Gemini provider exports the single metadata validator boundary", async () 
     summary: "Summary", topic: "Topic", keywords: ["one"],
     visualDescriptions: [{ assetName: "image.png", description: "image" }],
   });
+});
+
+test("Gemini provider bounds oversized fields at the shared normalization boundary", async () => {
+  const {
+    createGeminiProvider,
+    GEMINI_MAX_SUMMARY_CHARS,
+    GEMINI_MAX_TOPIC_CHARS,
+    GEMINI_MAX_KEYWORD_CHARS,
+    GEMINI_MAX_VISUAL_DESCRIPTION_CHARS,
+    GEMINI_MAX_ASSET_NAME_CHARS,
+  } = await import("../src/server/gemini-provider.mjs");
+  const provider = createGeminiProvider({
+    apiKey,
+    baseUrl,
+    modelId: "gemini-2.5-flash",
+    fetchImpl: async () => jsonResponse({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+      summary: "s".repeat(GEMINI_MAX_SUMMARY_CHARS + 10),
+      topic: "t".repeat(GEMINI_MAX_TOPIC_CHARS + 10),
+      keywords: ["k".repeat(GEMINI_MAX_KEYWORD_CHARS + 10)],
+      visualDescriptions: [{
+        assetName: "a".repeat(GEMINI_MAX_ASSET_NAME_CHARS + 10),
+        description: "d".repeat(GEMINI_MAX_VISUAL_DESCRIPTION_CHARS + 10),
+      }],
+    }) }] } }] }),
+  });
+
+  const metadata = await provider.enrichPage({ page: {}, text: "page", images: [{ mimeType: "image/png", base64: "aA==" }] });
+  assert.equal(metadata.summary.length, GEMINI_MAX_SUMMARY_CHARS);
+  assert.equal(metadata.topic.length, GEMINI_MAX_TOPIC_CHARS);
+  assert.equal(metadata.keywords[0].length, GEMINI_MAX_KEYWORD_CHARS);
+  assert.equal(metadata.visualDescriptions[0].assetName.length, GEMINI_MAX_ASSET_NAME_CHARS);
+  assert.equal(metadata.visualDescriptions[0].description.length, GEMINI_MAX_VISUAL_DESCRIPTION_CHARS);
 });
 
 test("Gemini provider maps provider failures to safe error codes without credential leakage", async () => {

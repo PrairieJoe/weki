@@ -5,21 +5,28 @@ export const GEMINI_MAX_IMAGES = 4;
 export const GEMINI_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 export const GEMINI_MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
 export const GEMINI_MAX_KEYWORDS = 12;
+export const GEMINI_MAX_SUMMARY_CHARS = 2_000;
+export const GEMINI_MAX_TOPIC_CHARS = 200;
+export const GEMINI_MAX_KEYWORD_CHARS = 100;
+export const GEMINI_MAX_VISUAL_DESCRIPTION_CHARS = 1_000;
+export const GEMINI_MAX_ASSET_NAME_CHARS = 255;
+
+const GEMINI_ENRICH_INSTRUCTION = "Return JSON with exactly these fields: summary, topic, keywords, and visualDescriptions for the supplied page.";
 
 export const GEMINI_RESPONSE_SCHEMA = Object.freeze({
   type: "OBJECT",
   properties: {
-    summary: { type: "STRING" },
-    topic: { type: "STRING" },
-    keywords: { type: "ARRAY", maxItems: GEMINI_MAX_KEYWORDS, items: { type: "STRING" } },
+    summary: { type: "STRING", maxLength: GEMINI_MAX_SUMMARY_CHARS },
+    topic: { type: "STRING", maxLength: GEMINI_MAX_TOPIC_CHARS },
+    keywords: { type: "ARRAY", maxItems: GEMINI_MAX_KEYWORDS, items: { type: "STRING", maxLength: GEMINI_MAX_KEYWORD_CHARS } },
     visualDescriptions: {
       type: "ARRAY",
       maxItems: GEMINI_MAX_IMAGES,
       items: {
         type: "OBJECT",
         properties: {
-          assetName: { type: "STRING" },
-          description: { type: "STRING" },
+          assetName: { type: "STRING", maxLength: GEMINI_MAX_ASSET_NAME_CHARS },
+          description: { type: "STRING", maxLength: GEMINI_MAX_VISUAL_DESCRIPTION_CHARS },
         },
         required: ["assetName", "description"],
         additionalProperties: false,
@@ -106,10 +113,13 @@ export function validateGeneratedMetadata(value, { maxVisualDescriptions = GEMIN
     throw providerError("external_ai_invalid_response");
   }
   return {
-    summary,
-    topic,
-    keywords: keywords.slice(0, GEMINI_MAX_KEYWORDS),
-    visualDescriptions: visualDescriptions.slice(0, maxVisualDescriptions),
+    summary: summary.slice(0, GEMINI_MAX_SUMMARY_CHARS),
+    topic: topic.slice(0, GEMINI_MAX_TOPIC_CHARS),
+    keywords: keywords.slice(0, GEMINI_MAX_KEYWORDS).map((keyword) => keyword.slice(0, GEMINI_MAX_KEYWORD_CHARS)),
+    visualDescriptions: visualDescriptions.slice(0, maxVisualDescriptions).map(({ assetName, description }) => ({
+      assetName: assetName.slice(0, GEMINI_MAX_ASSET_NAME_CHARS),
+      description: description.slice(0, GEMINI_MAX_VISUAL_DESCRIPTION_CHARS),
+    })),
   };
 }
 
@@ -175,7 +185,7 @@ export function createGeminiProvider({
 
     async enrichPage(input = {}) {
       const payload = buildGeminiPageInput(input);
-      const parts = [{ text: payload.text }];
+      const parts = [{ text: GEMINI_ENRICH_INSTRUCTION }, { text: payload.text }];
       for (const image of payload.images) {
         if (typeof image.mimeType === "string") {
           parts.push({ inlineData: { mimeType: image.mimeType, data: image.base64 } });
