@@ -462,17 +462,21 @@ Lightweight Intelligence에서 인접 Page/Slide 관계 판단에 Embedding이 �
 
 ## 4.3 사용자 온보딩 투어
 
-첫 화면의 초기 데이터 로드와 렌더링이 끝난 뒤, 완료 표식이 없는 설치 프로필에서는 선택형 5단계 설명 투어를 제공한다. 투어는 상시 hover tooltip이 아닌 단계형 코치 마크로 다음 핵심 흐름을 안내한다.
+첫 화면의 초기 데이터 로드와 렌더링이 끝난 뒤, 완료 표식이 없는 설치 프로필에서는 선택형 9단계 설명 투어를 제공한다. 투어는 상시 hover tooltip이 아닌 단계형 코치 마크로 다음 핵심 흐름을 안내한다.
 
-1. 검색 질문 입력
-2. 문서 등록
-3. 검색 결과와 근거 확인
-4. 설정의 문서 처리 모드
-5. MYBOX 검색 DB 동기화와 원본 지연 복원
+1. 문서 등록 화면
+2. 파일 선택
+3. 처리 모드
+4. 처리 대기열
+5. 문서 관리
+6. 질문 검색
+7. 검색 결과 정적 예시
+8. 근거 정적 예시
+9. MYBOX와 로컬 저장소
 
 온보딩 투어는 설명 전용이다. 투어 진행 중에는 문서를 등록하거나 검색을 실행하지 않으며, 처리 모드·보안 설정 등 제품 설정을 변경하지 않는다. MYBOX 업로드·동기화·원본 다운로드도 실행하지 않는다. 따라서 투어 진행만으로 문서·검색 색인·설정·MYBOX 데이터가 변경되어서는 안 된다.
 
-완료 여부는 제품 데이터와 분리된 현재 설치 프로필의 로컬 `localStorage`에 `weki.onboarding.v1.completed=completed`로 기록한다. 서버·DB·MYBOX에는 온보딩 상태를 저장하지 않는다. 기존 `사용 가이드` 진입점은 언제든 투어를 1단계부터 다시 재생하며, 건너뛰기·닫기·완료 시 투어 시작 당시 화면으로 복귀한다.
+완료 여부는 제품 데이터와 분리된 현재 설치 프로필의 로컬 `localStorage`에 `weki.onboarding.v1.completed=completed`로 기록한다. 서버·DB·MYBOX에는 온보딩 상태를 저장하지 않는다. 기존 완료 사용자는 자동으로 투어를 다시 보지 않는다. 기존 `사용 가이드` 진입점은 언제든 투어를 1단계부터 다시 재생하며, 건너뛰기·닫기·완료 시 투어 시작 당시 화면으로 복귀한다. 데스크톱에서는 제목 영역만 드래그해 대화상자를 이동할 수 있고 8px 화면 여백 안으로 제한하며, 모바일에서는 중앙 정렬을 유지한다.
 
 접근성 요구사항은 다음과 같다.
 
@@ -807,7 +811,7 @@ Visual Analysis에 실패하더라도 OCR/Native Text 등으로 검색 가능한
 
 # 9. AI 처리 정책
 
-## 9.1 Processing Mode 3단계
+## 9.1 Processing Mode 3단계와 기본 모드 2종
 
 1차 제품의 Processing Mode는 다음 세 단계다.
 
@@ -817,7 +821,11 @@ Visual Analysis에 실패하더라도 OCR/Native Text 등으로 검색 가능한
 | **Local AI 허용** | 경량 처리 + 사용자 PC에서 동작하는 명확한 Local AI 사용 허용 |
 | **External AI 허용** | 경량 처리 + Local AI + 관리영역 외부의 Cloud AI 및 비로컬 Custom Endpoint 사용 허용 |
 
-기본 설정은 **`auto`(`설치 상태에 따라 자동`)**다. 세 runtime 구성요소(semantic model, semantic reranker, document renderer)가 모두 준비되어 앱에 적용되기 전에는 실제 기본 처리 모드를 `경량 처리만`으로 사용한다. 세 구성요소가 모두 준비·적용되면 **새로 시작하는 작업부터** `Local AI 허용`을 실제 기본 처리 모드로 사용할 수 있다. 기존 Document는 이 설정 변경만으로 자동 재처리하지 않는다. 사용자가 특정 Job에서 `경량 처리만`을 명시한 경우에는 Local AI로 자동 승격하지 않는다.
+설정 화면의 기본 모드는 사용자에게 **`설치된 모델 사용`**과 **`외부 AI 사용`** 두 가지로 표시한다. 기존 `auto`, `lightweight`, `local-ai` 값은 호환을 위해 읽을 수 있으며 `설치된 모델 사용`으로 표시한다. 문서별 등록 화면에서는 위 세 가지 Processing Mode를 그대로 선택한다.
+
+기본 설정의 `설치된 모델 사용`은 **`auto`(`설치 상태에 따라 자동`)**에 해당한다. 세 runtime 구성요소(semantic model, semantic reranker, document renderer)가 모두 준비되어 앱에 적용되기 전에는 실제 기본 처리 모드를 `경량 처리만`으로 사용한다. 세 구성요소가 모두 준비·적용되면 **새로 시작하는 작업부터** `Local AI 허용`을 실제 기본 처리 모드로 사용한다. 기존 Document는 이 설정 변경만으로 자동 재처리하지 않는다. 사용자가 특정 Job에서 `경량 처리만`을 명시한 경우에는 Local AI로 자동 승격하지 않는다. `auto`는 외부 Provider가 준비되어도 외부 AI로 자동 승격하지 않는다.
+
+`외부 AI 사용`은 설정의 기본 모드를 `external-ai`로 저장한다. 외부 AI 사용을 켜는 모든 OFF→ON 전환에는 동의 버전 `1` 확인이 필요하다. 동의는 해당 설정 전환 또는 명시적으로 External AI를 허용한 Job의 범위에만 적용하며, 외부 AI가 준비되지 않으면 `External AI → Local AI → 경량 처리` 순으로 fallback한다. 외부 AI를 끄면 신규 Job부터 외부 처리를 사용하지 않지만 이미 Queue에 등록된 Job은 등록 당시 snapshot 정책을 유지한다.
 
 ### Local AI 예시
 
@@ -916,7 +924,7 @@ External AI 사용이 허용되더라도 전체 원본 파일을 그대로 외�
 
 사용자가 `External AI 허용`을 선택한 것은 **해당 Processing Job 범위에서의 외부 AI 사용 허용**으로 취급하며 다른 Job의 Processing Mode를 변경하지 않는다. 실제 처리 과정에서 External AI를 사용하지 않고 Local/Lightweight 경로만 사용된 경우에는 외부 전송이 발생하지 않는다.
 
-구체적인 고지 UI와 Provider 표시 방식은 UX/TRD에서 정의한다.
+구체적인 고지 UI와 Provider 표시 방식은 UX/TRD에서 정의한다. 현재 구현의 Gemini 보조 처리는 페이지별 추출 텍스트와 선택 이미지로 제한하고, 최대 텍스트 12,000자·이미지 4개·이미지당 2 MiB·총 8 MiB·30초 timeout을 적용한다. 생성된 Summary/Topic/Keyword/Visual Description은 검색 보조 메타데이터이며 최종 답변 생성 기능은 이 릴리스 범위에 포함하지 않는다.
 
 ---
 
@@ -2080,11 +2088,11 @@ MYBOX 백업 구성, 카탈로그 동기화 상태와 원본 Hash 검증에 필�
 
 1. 사용자가 앱 실행
 2. 저장소 위치 확인
-3. 기본 Processing Mode `설치 상태에 따라 자동` 안내. runtime 구성요소가 준비되기 전에는 실제로 경량 처리로 동작함을 함께 표시
+3. 기본 모드 `설치된 모델 사용` 안내. 이는 `auto` 정책이며 runtime 구성요소가 준비되기 전에는 실제로 경량 처리로 동작함을 함께 표시하고, 준비되면 새 작업부터 Local AI를 사용
 4. 빈 Knowledge Base에서 `[문서 등록 시작]`
 5. 파일 또는 디렉토리 선택
 6. 해당 Job의 Processing Mode 확인
-7. `External AI 허용`이며 실제 External AI 사용 가능성이 있으면 Provider/Endpoint와 외부 전송 가능 데이터 범위를 실행 전에 안내
+7. `External AI 허용`이며 실제 External AI 사용 가능성이 있으면 Provider/Endpoint와 외부 전송 가능 데이터 범위를 실행 전에 안내하고, 모든 OFF→ON 전환에는 동의 버전 `1` 확인을 요구
 8. Hash 확인
 9. 신규 Document 내부 저장소 복사
 10. Native Parsing 및 모든 Page/Slide OCR 포함 전처리 수행

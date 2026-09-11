@@ -14,12 +14,15 @@ const myboxSync = await readFile(new URL("../src/server/mybox-sync.mjs", import.
 const installer = await readFile(new URL("../build/installer.nsh", import.meta.url), "utf8");
 const statusApiTest = await readFile(new URL("../test/status-api.test.mjs", import.meta.url), "utf8");
 const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+const prd = await readFile(new URL("../docs/PRD_Weki.md", import.meta.url), "utf8");
+const userTestChecklist = await readFile(new URL("../docs/USER_TEST_CHECKLIST.md", import.meta.url), "utf8");
 const runScript = await readFile(new URL("../run-weki.bat", import.meta.url), "utf8");
 const buildInfo = await readFile(new URL("../release/BUILD_INFO.txt", import.meta.url), "utf8");
 const latestYml = await readFile(new URL("../release/latest.yml", import.meta.url), "utf8");
 const sha256 = await readFile(new URL("../release/SHA256.txt", import.meta.url), "utf8");
 const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
+const releaseNotesV123 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.3.md", import.meta.url), "utf8").catch(() => "");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
@@ -248,22 +251,19 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki source and packaged release metadata target v1.2.2", () => {
-  assert.equal(packageJson.version, "1.2.2");
-  assert.equal(packageLock.version, "1.2.2");
-  assert.equal(packageLock.packages?.[""].version, "1.2.2");
+test("Weki source release metadata targets v1.2.3", () => {
+  assert.equal(packageJson.version, "1.2.3");
+  assert.equal(packageLock.version, "1.2.3");
+  assert.equal(packageLock.packages?.[""].version, "1.2.3");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
   assert.match(buildInfo, /Application version:\s*1\.2\.2/);
-  assert.match(buildInfo, /Weki-1\.2\.2-Setup\.exe/);
   assert.match(latestYml, /version:\s*1\.2\.2/);
-  assert.match(latestYml, /Weki-1\.2\.2-Setup\.exe/);
   assert.match(sha256, /Weki-1\.2\.2-Setup\.exe\s+[A-Fa-f0-9]{64}/);
-  assert.match(readme, /v1\.2\.2 현재 정책/);
-  assert.match(readme, /release\/Weki-1\.2\.2-Setup\.exe/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
+  assert.match(releaseNotesV123, /1\.2\.3/);
 });
 
 test("Weki exposes the nine-step onboarding targets in order", () => {
@@ -394,8 +394,38 @@ test("Weki rolls back consent UI on backdrop dismissal and rejected consent PATC
 test("Weki installer keeps installation-folder copy on the program page and data-location copy on the data page", () => {
   const programPage = installer.slice(installer.indexOf("Function WekiInstallDirPageCreate"), installer.indexOf("Function WekiDataPageCreate"));
   const dataPage = installer.slice(installer.indexOf("Function WekiDataPageCreate"), installer.indexOf("Function WekiDataPageLeave"));
-  assert.match(programPage, /설치 폴더/);
-  assert.match(dataPage, /문서 데이터 저장 위치/);
+  assert.match(programPage, /NSD_CreateGroupBox\} \$\{WEKI_FORM_GROUP_X\} \$\{WEKI_FORM_GROUP_Y\}[^\n]*"설치 폴더"/);
+  assert.match(dataPage, /NSD_CreateGroupBox\} \$\{WEKI_FORM_GROUP_X\} \$\{WEKI_FORM_GROUP_Y\}[^\n]*"문서 데이터 저장 위치"/);
+  assert.doesNotMatch(dataPage, /NSD_CreateGroupBox\}[^\n]*"설치 폴더"/);
+});
+
+test("Weki v1.2.3 documentation states the shipped onboarding and external-AI policy", () => {
+  assert.match(readme, /v1\.2\.3 현재 정책/);
+  assert.match(readme, /9단계/);
+  assert.match(readme, /사용 가이드/);
+  assert.match(readme, /실제 문서나 설정을 변경하지 않습니다/);
+  assert.match(readme, /설치된 모델 사용/);
+  assert.match(readme, /외부 AI 사용/);
+  assert.match(readme, /Gemini Key/);
+  assert.match(readme, /암호화/);
+  assert.match(readme, /OFF→ON/);
+  assert.match(readme, /12,000/);
+  assert.match(readme, /2 MiB/);
+  assert.match(readme, /8 MiB/);
+  assert.match(readme, /30초/);
+  assert.match(readme, /검색 보조 메타데이터/);
+  assert.match(readme, /최종 답변 생성/);
+  assert.match(prd, /9단계/);
+  assert.match(prd, /OFF→ON.*동의/s);
+  assert.match(prd, /auto.*Local AI/s);
+  assert.match(userTestChecklist, /desktop.*drag|데스크톱.*드래그/i);
+  assert.match(userTestChecklist, /mobile.*center|모바일.*중앙/i);
+  assert.match(userTestChecklist, /static.*example|정적.*예시/i);
+  assert.match(userTestChecklist, /Key.*화면에 다시 표시하지|Key.*비공개/i);
+  assert.match(userTestChecklist, /끄면 신규 작업|OFF.*신규 작업/i);
+  assert.match(releaseNotesV123, /외부 전송/);
+  assert.match(releaseNotesV123, /자동.*재생|자동.*다시/);
+  assert.match(releaseNotesV123, /최종 답변 생성/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
