@@ -65,6 +65,10 @@ const packagedIconPath = path.join(__dirname, 'dist', 'app-icon.png');
 const myboxCredentialState = { state: 'missing', token: null };
 let activeDataDir = null;
 let activeServerEnv = null;
+const aiCredentialStore = async () => {
+  const { createAiCredentialsStore } = await import('./src/server/ai-credentials.mjs');
+  return createAiCredentialsStore({ filePath: path.join(activeDataDir, 'credentials', 'gemini-api-key.json'), safeStorage });
+};
 const serverIsReady = async () => { try { return (await fetch(`${appUrl}/api/status`)).ok; } catch { return false; } };
 const waitForServer = async () => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -188,6 +192,28 @@ ipcMain.handle('weki:clear-mybox-token', async () => {
   if (activeServerEnv) { delete activeServerEnv.NAVER_MBOX_TOKEN; activeServerEnv.WEKI_MYBOX_CREDENTIAL_STATE = 'missing'; }
   const applied = await restartOwnedServer();
   return { ok: true, state: 'missing', applied };
+});
+ipcMain.handle('weki:gemini-credential-status', async () => {
+  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
+  try { return await (await aiCredentialStore()).getStatus(); } catch { return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'CREDENTIAL_UNAVAILABLE' }; }
+});
+ipcMain.handle('weki:save-gemini-key', async (_event, apiKey) => {
+  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
+  try {
+    const result = await (await aiCredentialStore()).saveApiKey(apiKey);
+    await restartOwnedServer();
+    return { ...result, encryptionAvailable: safeStorage.isEncryptionAvailable() };
+  } catch (error) {
+    return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: ['INVALID_API_KEY', 'ENCRYPTION_UNAVAILABLE'].includes(error?.code) ? error.code : 'CREDENTIAL_WRITE_FAILED' };
+  }
+});
+ipcMain.handle('weki:clear-gemini-key', async () => {
+  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
+  try {
+    const result = await (await aiCredentialStore()).clearApiKey();
+    await restartOwnedServer();
+    return { ...result, encryptionAvailable: safeStorage.isEncryptionAvailable() };
+  } catch { return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'CREDENTIAL_CLEAR_FAILED' }; }
 });
 ipcMain.handle('weki:restart', () => {
   app.relaunch();
