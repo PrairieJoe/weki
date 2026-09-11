@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createAiCredentialsStore } from "../src/server/ai-credentials.mjs";
+import { createAiCredentialIpcHandlers, createAiCredentialsStore } from "../src/server/ai-credentials.mjs";
 
 async function temporaryFile(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "weki-ai-credentials-"));
@@ -72,6 +72,16 @@ test("Gemini status never returns plaintext and clearing makes it unconfigured",
   assert.deepEqual(await store.getStatus(), { provider: "gemini", configured: false, encryptionAvailable: true });
 });
 
+test("Gemini credential status rejects records with an extra plaintext field", async (t) => {
+  const filePath = await temporaryFile(t);
+  const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
+  await store.saveApiKey("AIza-valid");
+  const record = JSON.parse(await fs.readFile(filePath, "utf8"));
+  await fs.writeFile(filePath, JSON.stringify({ ...record, apiKey: "AIza-plaintext" }), "utf8");
+
+  assert.deepEqual(await store.getStatus(), { provider: "gemini", configured: false, encryptionAvailable: true });
+});
+
 test("Gemini credentials fail explicitly when encryption is unavailable", async (t) => {
   const store = createAiCredentialsStore({ filePath: await temporaryFile(t), safeStorage: safeStorage({ available: false }) });
 
@@ -90,4 +100,45 @@ test("a failed write keeps the existing Gemini credential and removes its tempor
   await assert.rejects(() => failingStore.saveApiKey("AIza-new"), { code: "EIO" });
   assert.equal(await fs.readFile(filePath, "utf8"), before);
   assert.deepEqual((await fs.readdir(path.dirname(filePath))).filter((entry) => entry.endsWith(".tmp")), []);
+});
+
+test("Gemini IPC save and clear use a local reload and expose only safe booleans", async (t) => {
+  const filePath = await temporaryFile(t);
+  const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
+  let reloadCalls = 0;
+  let networkCalls = 0;
+  const handlers = createAiCredentialIpcHandlers({
+    getStore: async () => store,
+    encryptionAvailable: () => true,
+    reloadServer: async () => { reloadCalls += 1; },
+    networkRequest: () => { networkCalls += 1; },
+  });
+
+  const saved = await handlers.save("AIza-local-only");
+  const status = await handlers.status();
+  const cleared = await handlers.clear();
+
+  assert.deepEqual(Object.keys(saved).sort(), ["configured", "encryptionAvailable"]);
+  assert.deepEqual(saved, { configured: true, encryptionAvailable: true });
+  assert.deepEqual(Object.keys(status).sort(), ["configured", "encryptionAvailable"]);
+  assert.deepEqual(status, { configured: true, encryptionAvailable: true });
+  assert.deepEqual(Object.keys(cleared).sort(), ["configured", "encryptionAvailable"]);
+  assert.deepEqual(cleared, { configured: false, encryptionAvailable: true });
+  assert.equal(reloadCalls, 2);
+  assert.equal(networkCalls, 0, "saving and clearing credentials must not call the network");
+});
+
+test("Gemini IPC keeps configured true when local reload fails after saving", async (t) => {
+  const filePath = await temporaryFile(t);
+  const store = createAiCredentialsStore({ filePath, safeStorage: safeStorage() });
+  const handlers = createAiCredentialIpcHandlers({
+    getStore: async () => store,
+    encryptionAvailable: () => true,
+    reloadServer: async () => { throw new Error("local reload failed"); },
+  });
+
+  const result = await handlers.save("AIza-reload-failure");
+
+  assert.deepEqual(result, { configured: true, encryptionAvailable: true });
+  assert.equal((await store.getStatus()).configured, true);
 });

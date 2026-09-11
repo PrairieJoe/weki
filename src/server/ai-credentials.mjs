@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const provider = "gemini";
+const credentialKeys = ["ciphertext", "format", "provider", "version"];
 
 function credentialError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -14,7 +15,8 @@ function encryptionAvailable(safeStorage) {
 
 function parseRecord(raw) {
   const record = JSON.parse(raw);
-  if (record?.format !== "weki-credential" || record.provider !== provider || record.version !== 1 || typeof record.ciphertext !== "string" || !record.ciphertext) {
+  const keys = record && typeof record === "object" && !Array.isArray(record) ? Object.keys(record).sort() : [];
+  if (keys.length !== credentialKeys.length || keys.some((key, index) => key !== credentialKeys.slice().sort()[index]) || record?.format !== "weki-credential" || record.provider !== provider || record.version !== 1 || typeof record.ciphertext !== "string" || !record.ciphertext) {
     throw credentialError("CREDENTIAL_UNREADABLE", "Gemini credential format is invalid.");
   }
   return record;
@@ -59,4 +61,44 @@ export function createAiCredentialsStore({ filePath, safeStorage, fsImpl = fs, p
   }
 
   return { saveApiKey, clearApiKey, getStatus };
+}
+
+function safeReply(encryptionAvailable, configured) {
+  let available = false;
+  try { available = Boolean(encryptionAvailable()); } catch {}
+  return { configured: Boolean(configured), encryptionAvailable: available };
+}
+
+async function currentConfigured(store) {
+  try { return Boolean((await store.getStatus()).configured); } catch { return false; }
+}
+
+export function createAiCredentialIpcHandlers({ getStore, encryptionAvailable, reloadServer = async () => {} }) {
+  return {
+    async status() {
+      try { return safeReply(encryptionAvailable, await currentConfigured(await getStore())); } catch { return safeReply(encryptionAvailable, false); }
+    },
+    async save(apiKey) {
+      let store;
+      try {
+        store = await getStore();
+        await store.saveApiKey(apiKey);
+        try { await reloadServer(); } catch {}
+        return safeReply(encryptionAvailable, true);
+      } catch {
+        return safeReply(encryptionAvailable, store ? await currentConfigured(store) : false);
+      }
+    },
+    async clear() {
+      let store;
+      try {
+        store = await getStore();
+        await store.clearApiKey();
+        try { await reloadServer(); } catch {}
+        return safeReply(encryptionAvailable, false);
+      } catch {
+        return safeReply(encryptionAvailable, store ? await currentConfigured(store) : false);
+      }
+    },
+  };
 }

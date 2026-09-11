@@ -167,6 +167,25 @@ const restartOwnedServer = async () => {
   await waitForServer();
   return true;
 };
+const reloadOwnedServer = async () => {
+  if (!ownsServer || !activeServerEnv) return false;
+  const oldServer = server;
+  if (oldServer && !oldServer.killed) {
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      oldServer.once('exit', finish);
+      oldServer.kill();
+      setTimeout(finish, 2000);
+    });
+  }
+  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: 'ignore', windowsHide: true });
+  return true;
+};
+const getAiCredentialHandlers = async () => {
+  const { createAiCredentialIpcHandlers } = await import('./src/server/ai-credentials.mjs');
+  return createAiCredentialIpcHandlers({ getStore: aiCredentialStore, encryptionAvailable: () => safeStorage.isEncryptionAvailable(), reloadServer: reloadOwnedServer });
+};
 ipcMain.handle('weki:credential-status', () => ({ state: myboxCredentialState.state, encryptionAvailable: safeStorage.isEncryptionAvailable() }));
 ipcMain.handle('weki:save-mybox-token', async (_event, value) => {
   const token = String(value || '').trim();
@@ -193,28 +212,9 @@ ipcMain.handle('weki:clear-mybox-token', async () => {
   const applied = await restartOwnedServer();
   return { ok: true, state: 'missing', applied };
 });
-ipcMain.handle('weki:gemini-credential-status', async () => {
-  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
-  try { return await (await aiCredentialStore()).getStatus(); } catch { return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'CREDENTIAL_UNAVAILABLE' }; }
-});
-ipcMain.handle('weki:save-gemini-key', async (_event, apiKey) => {
-  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
-  try {
-    const result = await (await aiCredentialStore()).saveApiKey(apiKey);
-    await restartOwnedServer();
-    return { ...result, encryptionAvailable: safeStorage.isEncryptionAvailable() };
-  } catch (error) {
-    return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: ['INVALID_API_KEY', 'ENCRYPTION_UNAVAILABLE'].includes(error?.code) ? error.code : 'CREDENTIAL_WRITE_FAILED' };
-  }
-});
-ipcMain.handle('weki:clear-gemini-key', async () => {
-  if (!activeDataDir) return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'DATA_DIR_UNAVAILABLE' };
-  try {
-    const result = await (await aiCredentialStore()).clearApiKey();
-    await restartOwnedServer();
-    return { ...result, encryptionAvailable: safeStorage.isEncryptionAvailable() };
-  } catch { return { provider: 'gemini', configured: false, encryptionAvailable: safeStorage.isEncryptionAvailable(), error: 'CREDENTIAL_CLEAR_FAILED' }; }
-});
+ipcMain.handle('weki:gemini-credential-status', async () => (await getAiCredentialHandlers()).status());
+ipcMain.handle('weki:save-gemini-key', async (_event, apiKey) => (await getAiCredentialHandlers()).save(apiKey));
+ipcMain.handle('weki:clear-gemini-key', async () => (await getAiCredentialHandlers()).clear());
 ipcMain.handle('weki:restart', () => {
   app.relaunch();
   app.exit(0);
