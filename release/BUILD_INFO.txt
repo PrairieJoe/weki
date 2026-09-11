@@ -1,15 +1,9 @@
-Application source commit: 82e3b42
-Build date/time: 2026-09-10 19:08:50 +09:00
-Application version: 1.2.2
-Installer file name: Weki-1.2.2-Setup.exe
-Installer size: 232101203 bytes
-Installer path: release/Weki-1.2.2-Setup.exe
-Installer SHA-256: 87227A153886E15B3D991F821B1FEFF9B6A0F8E0197D04B53DC6C5BDAB1684AC
-Installer SHA-512: D1C4193E8A0DC6D4B6381676911609720CCBF461F51913C88D2B3D3957A46AAEF2E705BD42D5D8F465ECB4D4D3DE287582E3C35C27CFF35181A0590BB4EFB845
-npm test: 200 passed, 0 failed, 0 skipped (using existing ignored PDF/HWPX test_data fixtures)
-npm run test:e2e: 2 passed, 0 failed, 0 skipped (legacy PDF flow and fixture-free onboarding passed)
-Test fixture policy: test_data fixtures remain ignored and are not included in the release artifact or commits
-npm run build: PASS
-npm run dist:win: PASS
-Packaging check: PASS (packaged version 1.2.2; app.asar contains reordered onboarding, neutral scrim and runtime grid CSS)
-Release status: v1.2.2 ARTIFACT VERIFIED; FULL LOCAL TEST SUITE GREEN WITH PROVIDED FIXTURES
+Application source commit: c027395c045fd438dd06c8d15885f52b98fce9d2
+Build date/time: 2026-09-11 16:34:08 +09:00
+Application version: 1.2.3
+Installer file name: Weki-1.2.3-Setup.exe
+Installer size: 232126715 bytes
+Installer path: release/Weki-1.2.3-Setup.exe
+Installer SHA-256: 32E759C2FFCAD223C26CA75539EDA2B415169D960089030963C39E7CE8E0952F
+Installer SHA-512: C89DBE3225A8A152D8154AA45A317D1B688F69140D77511881829C314F34B92A83BC447B62FC198F46A7F5CA85150937D8C9531D6501280A05701C9DE8A98934
+Metadata source: npm run dist:win artifact verified by npm run release:metadata
