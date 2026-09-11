@@ -25,7 +25,7 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
           { name: "models/no-capability", displayName: "No capability" },
         ] });
       }
-      return jsonResponse({ candidates: [{ content: { parts: [{ text: '{"summary":"Short","topic":"Topic","keywords":["one"],"visualDescriptions":["chart"],"ignored":true}' }] } }] });
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: '{"summary":"Short","topic":"Topic","keywords":["one"],"visualDescriptions":[{"assetName":"chart.png","description":"chart"}],"ignored":true}' }] } }] });
     },
   });
 
@@ -35,7 +35,7 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
     page: { id: "page-1", document: "must not leave the process" },
     text: "page text",
     images: [{ name: "chart.png", mimeType: "image/png", base64: "allowed" }],
-  }), { summary: "Short", topic: "Topic", keywords: ["one"], visualDescriptions: ["chart"] });
+  }), { summary: "Short", topic: "Topic", keywords: ["one"], visualDescriptions: [{ assetName: "chart.png", description: "chart" }] });
 
   assert.match(requests[0].url, /^https:\/\/gemini\.test\/v1beta\/models\?key=secret-api-key$/);
   assert.equal(requests[0].options.body, undefined);
@@ -46,6 +46,12 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
     { inlineData: { mimeType: "image/png", data: "allowed" } },
   ]);
   assert.equal(requests[2].body.generationConfig.responseMimeType, "application/json");
+  const schema = requests[2].body.generationConfig.responseSchema;
+  assert.deepEqual(Object.keys(schema.properties), ["summary", "topic", "keywords", "visualDescriptions"]);
+  assert.deepEqual(schema.required, ["summary", "topic", "keywords", "visualDescriptions"]);
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(Object.keys(schema.properties.visualDescriptions.items.properties), ["assetName", "description"]);
+  assert.equal(schema.properties.visualDescriptions.items.additionalProperties, false);
   for (const request of requests) {
     assert.doesNotMatch(JSON.stringify(request.options.headers ?? {}), /secret-api-key/i);
     assert.doesNotMatch(JSON.stringify(request.body ?? {}), /secret-api-key/i);
@@ -54,11 +60,61 @@ test("Gemini provider uses REST endpoints and sends only permitted page content"
 
 test("Gemini provider safely extracts fenced structured JSON", async () => {
   const provider = await createProvider({
-    fetchImpl: async () => jsonResponse({ candidates: [{ content: { parts: [{ text: "```json\n{\"summary\":\"Summary\",\"topic\":\"Topic\",\"keywords\":[\"one\"],\"visualDescriptions\":[\"image\"],\"extra\":\"discard\"}\n```" }] } }] }),
+    fetchImpl: async () => jsonResponse({ candidates: [{ content: { parts: [{ text: "```json\n{\"summary\":\"Summary\",\"topic\":\"Topic\",\"keywords\":[\"one\"],\"visualDescriptions\":[{\"assetName\":\"image.png\",\"description\":\"image\"}],\"extra\":\"discard\"}\n```" }] } }] }),
   });
 
-  assert.deepEqual(await provider.enrichPage({ page: {}, text: "text", images: [] }), {
-    summary: "Summary", topic: "Topic", keywords: ["one"], visualDescriptions: ["image"],
+  assert.deepEqual(await provider.enrichPage({ page: {}, text: "text", images: [{ name: "image.png", mimeType: "image/png", base64: "aGVsbG8=" }] }), {
+    summary: "Summary", topic: "Topic", keywords: ["one"], visualDescriptions: [{ assetName: "image.png", description: "image" }],
+  });
+});
+
+test("Gemini provider caps serialized text and image payloads and reports excluded images", async () => {
+  const { buildGeminiPageInput, GEMINI_MAX_TEXT_UTF16_CHARS, GEMINI_MAX_IMAGES, GEMINI_MAX_IMAGE_BYTES, GEMINI_MAX_TOTAL_IMAGE_BYTES } = await import("../src/server/gemini-provider.mjs");
+  const requests = [];
+  const provider = await createProvider({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: '{"summary":"ok","topic":"ok","keywords":[],"visualDescriptions":[]}' }] } }] });
+    },
+  });
+  assert.equal(GEMINI_MAX_TEXT_UTF16_CHARS, 12_000);
+  assert.equal(GEMINI_MAX_IMAGES, 4);
+  assert.equal(GEMINI_MAX_IMAGE_BYTES, 2 * 1024 * 1024);
+  assert.equal(GEMINI_MAX_TOTAL_IMAGE_BYTES, 8 * 1024 * 1024);
+  const maxText = GEMINI_MAX_TEXT_UTF16_CHARS;
+  const maxImageBytes = GEMINI_MAX_IMAGE_BYTES;
+  const image = (name, byteLength) => ({ name, mimeType: "image/png", base64: Buffer.alloc(byteLength, 1).toString("base64") });
+  const images = [
+    image("too-large.png", maxImageBytes + 1),
+    image("one.png", maxImageBytes),
+    image("two.png", maxImageBytes),
+    image("three.png", maxImageBytes),
+    image("four.png", maxImageBytes),
+    image("excluded-by-count.png", 1),
+  ];
+  const input = buildGeminiPageInput({ page: { id: "page-1" }, text: "x".repeat(maxText + 5), images });
+  assert.equal(input.text.length, maxText);
+  assert.equal(input.images.length, 4);
+  assert.equal(input.excludedImageCount, 2);
+
+  await provider.enrichPage({ page: { id: "page-1" }, text: "x".repeat(maxText + 5), images });
+  const parts = requests[0].body.contents[0].parts;
+  assert.equal(parts[0].text.length, maxText);
+  const serializedImages = parts.slice(1).map((part) => part.inlineData.data);
+  assert.equal(serializedImages.length, 4);
+  assert.ok(serializedImages.every((data) => Buffer.from(data, "base64").byteLength <= maxImageBytes));
+  assert.equal(serializedImages.reduce((total, data) => total + Buffer.from(data, "base64").byteLength, 0), GEMINI_MAX_TOTAL_IMAGE_BYTES);
+  assert.doesNotMatch(JSON.stringify(requests[0].body), /secret-api-key/);
+});
+
+test("Gemini provider exports the single metadata validator boundary", async () => {
+  const { validateGeneratedMetadata } = await import("../src/server/gemini-provider.mjs");
+  assert.deepEqual(validateGeneratedMetadata({
+    summary: "Summary", topic: "Topic", keywords: ["one"],
+    visualDescriptions: [{ assetName: "image.png", description: "image" }], extra: "discard",
+  }), {
+    summary: "Summary", topic: "Topic", keywords: ["one"],
+    visualDescriptions: [{ assetName: "image.png", description: "image" }],
   });
 });
 

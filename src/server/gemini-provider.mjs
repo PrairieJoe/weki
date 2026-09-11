@@ -1,5 +1,35 @@
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
+export const GEMINI_MAX_TEXT_UTF16_CHARS = 12_000;
+export const GEMINI_MAX_IMAGES = 4;
+export const GEMINI_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+export const GEMINI_MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
+export const GEMINI_MAX_KEYWORDS = 12;
+
+export const GEMINI_RESPONSE_SCHEMA = Object.freeze({
+  type: "OBJECT",
+  properties: {
+    summary: { type: "STRING" },
+    topic: { type: "STRING" },
+    keywords: { type: "ARRAY", maxItems: GEMINI_MAX_KEYWORDS, items: { type: "STRING" } },
+    visualDescriptions: {
+      type: "ARRAY",
+      maxItems: GEMINI_MAX_IMAGES,
+      items: {
+        type: "OBJECT",
+        properties: {
+          assetName: { type: "STRING" },
+          description: { type: "STRING" },
+        },
+        required: ["assetName", "description"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "topic", "keywords", "visualDescriptions"],
+  additionalProperties: false,
+});
+
 function providerError(code) {
   const error = new Error(code);
   error.code = code;
@@ -24,16 +54,63 @@ function extractJson(text) {
   return parseJson(fenced ? fenced[1] : text.trim());
 }
 
-function normalizeMetadata(value) {
+function base64ByteLength(value) {
+  const normalized = value.replace(/\s/g, "");
+  if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1) return Infinity;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.floor(normalized.length * 3 / 4) - padding;
+}
+
+export function buildGeminiPageInput({ page, text, images } = {}) {
+  const sourceImages = Array.isArray(images) ? images : [];
+  const selectedImages = [];
+  let totalImageBytes = 0;
+  let excludedImageCount = 0;
+  for (const image of sourceImages) {
+    const imageBytes = typeof image?.base64 === "string" && typeof image?.mimeType === "string" ? base64ByteLength(image.base64) : Infinity;
+    if (
+      selectedImages.length >= GEMINI_MAX_IMAGES
+      || imageBytes > GEMINI_MAX_IMAGE_BYTES
+      || totalImageBytes + imageBytes > GEMINI_MAX_TOTAL_IMAGE_BYTES
+    ) {
+      excludedImageCount += 1;
+      continue;
+    }
+    selectedImages.push({
+      name: typeof image.name === "string" ? image.name : "",
+      mimeType: image.mimeType,
+      base64: image.base64,
+    });
+    totalImageBytes += imageBytes;
+  }
+  const pageNumber = typeof page === "number" ? page : page?.page ?? page?.number;
+  return {
+    ...(typeof pageNumber === "number" ? { page: pageNumber } : {}),
+    text: typeof text === "string" ? text.slice(0, GEMINI_MAX_TEXT_UTF16_CHARS) : "",
+    images: selectedImages,
+    excludedImageCount,
+    includedImageCount: selectedImages.length,
+    totalImageBytes,
+  };
+}
+
+export function validateGeneratedMetadata(value, { maxVisualDescriptions = GEMINI_MAX_IMAGES } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw providerError("external_ai_invalid_response");
   const { summary, topic, keywords, visualDescriptions } = value;
   if (typeof summary !== "string" || typeof topic !== "string" || !Array.isArray(keywords) || !Array.isArray(visualDescriptions)) {
     throw providerError("external_ai_invalid_response");
   }
-  if (!keywords.every((item) => typeof item === "string") || !visualDescriptions.every((item) => typeof item === "string")) {
+  if (!keywords.every((item) => typeof item === "string") || !visualDescriptions.every((item) => (
+    item && typeof item === "object" && typeof item.assetName === "string" && typeof item.description === "string"
+  ))) {
     throw providerError("external_ai_invalid_response");
   }
-  return { summary, topic, keywords, visualDescriptions };
+  return {
+    summary,
+    topic,
+    keywords: keywords.slice(0, GEMINI_MAX_KEYWORDS),
+    visualDescriptions: visualDescriptions.slice(0, maxVisualDescriptions),
+  };
 }
 
 function codeForStatus(status) {
@@ -96,19 +173,27 @@ export function createGeminiProvider({
       return { status: "ready", provider: "gemini", modelId };
     },
 
-    async enrichPage({ text, images } = {}) {
-      const parts = [{ text: typeof text === "string" ? text : "" }];
-      for (const image of Array.isArray(images) ? images : []) {
-        if (typeof image?.mimeType === "string" && typeof image?.base64 === "string") {
+    async enrichPage(input = {}) {
+      const payload = buildGeminiPageInput(input);
+      const parts = [{ text: payload.text }];
+      for (const image of payload.images) {
+        if (typeof image.mimeType === "string") {
           parts.push({ inlineData: { mimeType: image.mimeType, data: image.base64 } });
         }
       }
-      const response = await generate({
-        contents: [{ role: "user", parts }],
-        generationConfig: { responseMimeType: "application/json" },
-      });
-      const responseText = response?.candidates?.[0]?.content?.parts?.find((part) => typeof part?.text === "string")?.text;
-      return normalizeMetadata(extractJson(responseText));
+      try {
+        const response = await generate({
+          contents: [{ role: "user", parts }],
+          generationConfig: { responseMimeType: "application/json", responseSchema: GEMINI_RESPONSE_SCHEMA },
+        });
+        const responseText = response?.candidates?.[0]?.content?.parts?.find((part) => typeof part?.text === "string")?.text;
+        return validateGeneratedMetadata(extractJson(responseText), { maxVisualDescriptions: payload.images.length });
+      } finally {
+        payload.images.length = 0;
+        for (const part of parts) {
+          if (part.inlineData) delete part.inlineData.data;
+        }
+      }
     },
   };
 }
