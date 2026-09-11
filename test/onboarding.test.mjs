@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ONBOARDING_STEPS,
   ONBOARDING_STORAGE_KEY,
+  clampDialogPosition,
   completeOnboarding,
   createOnboardingController,
   shouldAutoStartOnboarding,
@@ -38,19 +39,25 @@ test("온보딩은 고정된 키와 9단계 화면·대상 순서를 공개한�
   assert.equal(ONBOARDING_STORAGE_KEY, "weki.onboarding.v1.completed");
   assert.equal(ONBOARDING_STEPS.length, 9);
   assert.deepEqual(
-    ONBOARDING_STEPS.map(({ page, target }) => ({ page, target })),
+    ONBOARDING_STEPS.map(({ id, page, target, example }) => ({ id, page, target, example: Boolean(example) })),
     [
-      { page: "add", target: "registration-screen" },
-      { page: "add", target: "choose-files" },
-      { page: "add", target: "registration-mode" },
-      { page: "add", target: "processing-queue" },
-      { page: "documents", target: "documents-empty" },
-      { page: "search", target: "search-composer" },
-      { page: "search", target: "example-results" },
-      { page: "search", target: "example-evidence" },
-      { page: "settings", target: "mybox" },
+      { id: "registration-screen", page: "add", target: null, example: false },
+      { id: "choose-files", page: "add", target: "choose-files", example: false },
+      { id: "registration-mode", page: "add", target: "registration-mode", example: false },
+      { id: "processing-queue", page: "add", target: "processing-queue", example: false },
+      { id: "documents-empty", page: "documents", target: "documents-empty", example: false },
+      { id: "search-composer", page: "search", target: "search-composer", example: false },
+      { id: "example-results", page: "onboarding-example", target: null, example: true },
+      { id: "example-evidence", page: "onboarding-example", target: null, example: true },
+      { id: "mybox", page: "settings", target: "mybox", example: false },
     ],
   );
+});
+
+test("온보딩 dialog 위치는 viewport와 gutter 안으로 clamp한다", () => {
+  assert.deepEqual(clampDialogPosition({ left: -100, top: -40, width: 240, height: 180, viewportWidth: 800, viewportHeight: 600 }), { left: 8, top: 8 });
+  assert.deepEqual(clampDialogPosition({ left: 900, top: 700, width: 240, height: 180, viewportWidth: 800, viewportHeight: 600 }), { left: 552, top: 412 });
+  assert.deepEqual(clampDialogPosition({ left: 10, top: 10, width: 900, height: 700, viewportWidth: 800, viewportHeight: 600 }), { left: 8, top: 8 });
 });
 
 test("온보딩 저장소 상태는 비어 있거나 읽기 실패 시 자동 시작을 허용한다", () => {
@@ -88,7 +95,7 @@ test("온보딩 컨트롤러는 재생 시 1단계에서 시작하고 이전·�
   await controller.start();
   assert.equal(controller.getState().active, true);
   assert.equal(controller.getState().index, 0);
-  assert.equal(controller.getState().step.target, "registration-screen");
+  assert.equal(controller.getState().step.id, "registration-screen");
   assert.equal(page, "add");
 
   await controller.previous();
@@ -165,15 +172,13 @@ test("온보딩은 진행 중 중복 next 호출을 무시해 단계를 건너�
   let page = "add";
   let navigationStarted;
   let navigationRelease;
-  let navigationCount = 0;
   const storage = new FakeStorage();
   const controller = createOnboardingController({
     storage,
     getCurrentPage: () => page,
     navigateToPage: async (nextPage) => {
       page = nextPage;
-      navigationCount += 1;
-      if (navigationCount === 1) {
+      if (nextPage === "documents") {
         navigationStarted.resolve();
         await navigationRelease.promise;
       }
@@ -184,16 +189,19 @@ test("온보딩은 진행 중 중복 next 호출을 무시해 단계를 건너�
   });
 
   await controller.start();
+  await controller.next();
+  await controller.next();
+  await controller.next();
   navigationStarted = deferred();
   navigationRelease = deferred();
   const firstNext = controller.next();
   await navigationStarted.promise;
   const secondNext = controller.next();
 
-  assert.equal(controller.getState().index, 1);
+  assert.equal(controller.getState().index, 4);
   navigationRelease.resolve();
   await Promise.all([firstNext, secondNext]);
-  assert.equal(controller.getState().index, 1);
+  assert.equal(controller.getState().index, 4);
 });
 
 test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건너뛰지 않는다", async () => {
@@ -218,7 +226,10 @@ test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건�
 
   await controller.start();
   await controller.next();
-  assert.equal(controller.getState().index, 1);
+  await controller.next();
+  await controller.next();
+  await controller.next();
+  assert.equal(controller.getState().index, 4);
 
   deferAddNavigation = true;
   navigationStarted = deferred();
@@ -227,10 +238,10 @@ test("온보딩은 진행 중 중복 previous 호출을 무시해 단계를 건�
   await navigationStarted.promise;
   const secondPrevious = controller.previous();
 
-  assert.equal(controller.getState().index, 0);
+  assert.equal(controller.getState().index, 3);
   navigationRelease.resolve();
   await Promise.all([firstPrevious, secondPrevious]);
-  assert.equal(controller.getState().index, 0);
+  assert.equal(controller.getState().index, 3);
 });
 
 class FakeElement {
@@ -318,6 +329,10 @@ class FakeElement {
     if (name === "disabled") this.disabled = false;
   }
 
+  getAttribute(name) {
+    return this.attributes.get(name) ?? null;
+  }
+
   hasAttribute(name) {
     return this.attributes.has(name);
   }
@@ -354,11 +369,15 @@ class FakeElement {
     return selector.split(",").some((part) => {
       const normalized = part.trim();
       if (normalized === "button:not([disabled])") return this.tagName === "BUTTON" && !this.disabled;
+      if (normalized === "[role=dialog]") return this.attributes.get("role") === "dialog";
       if (normalized === "[data-onboarding-spotlight]") return this.attributes.has("data-onboarding-spotlight");
       if (normalized === "[data-onboarding-next]") return this.attributes.has("data-onboarding-next");
       if (normalized === "[data-onboarding-previous]") return this.attributes.has("data-onboarding-previous");
       if (normalized === "[data-onboarding-skip]") return this.attributes.has("data-onboarding-skip");
       if (normalized === "[data-onboarding-close]") return this.attributes.has("data-onboarding-close");
+      if (normalized === "[data-onboarding-drag-handle]") return this.attributes.has("data-onboarding-drag-handle");
+      const example = normalized.match(/^\[data-onboarding-example="([^"]+)"\]$/);
+      if (example) return this.dataset.onboardingExample === example[1];
       const target = normalized.match(/^\[data-onboarding-target="([^"]+)"\]$/);
       if (target) return this.dataset.onboardingTarget === target[1];
       if (normalized.startsWith("#")) return this.id === normalized.slice(1);
@@ -412,7 +431,7 @@ function createFakeWindow() {
 test("온보딩 대상이 viewport 밖에 남으면 스크롤 후 중앙 카드 fallback을 사용한다", async () => {
   const documentRef = new FakeDocument();
   const target = documentRef.createElement("div");
-  target.setAttribute("data-onboarding-target", "registration-dropzone");
+  target.setAttribute("data-onboarding-target", "choose-files");
   target.rect = { top: 1000, left: 20, width: 300, height: 40 };
   target.afterScrollRect = { top: 700, left: 20, width: 300, height: 40 };
   documentRef.body.append(target);
@@ -424,6 +443,7 @@ test("온보딩 대상이 viewport 밖에 남으면 스크롤 후 중앙 카드 
     getCurrentPage: () => "search",
   });
   await controller.start();
+  await controller.next();
 
   const root = documentRef.querySelector("#onboarding-root");
   const spotlight = root.querySelector("[data-onboarding-spotlight]");
@@ -461,7 +481,48 @@ test("온보딩 replay는 이전 완료값과 무관하게 1단계와 중앙 dia
   });
   await controller.start({ replay: true });
   assert.equal(controller.getState().index, 0);
-  assert.equal(controller.getState().step.target, "registration-screen");
+  assert.equal(controller.getState().step.id, "registration-screen");
   const dialog = documentRef.querySelector("#onboarding-root").querySelector("[role=dialog]");
-  assert.equal(dialog?.getAttribute("data-onboarding-position"), "center");
+  assert.equal(dialog?.dataset.onboardingPosition, "center");
+});
+
+test("온보딩 정적 결과·근거 예시는 상태 저장소 없이 렌더링되고 drag listener를 정리한다", async () => {
+  const documentRef = new FakeDocument();
+  const windowRef = createFakeWindow();
+  const controller = createOnboardingController({ documentRef, windowRef, storage: new FakeStorage(), getCurrentPage: () => "search" });
+  await controller.start();
+  for (let index = 0; index < 6; index += 1) await controller.next();
+  assert.equal(controller.getState().step.id, "example-results");
+  assert.ok(documentRef.querySelector('[data-onboarding-example="results"]'));
+  assert.equal(documentRef.querySelector('[data-document-id]'), null);
+  await controller.next();
+  assert.equal(controller.getState().step.id, "example-evidence");
+  assert.ok(documentRef.querySelector('[data-onboarding-example="evidence"]'));
+  assert.equal(documentRef.querySelector('[data-document-id]'), null);
+  const title = documentRef.querySelector("[data-onboarding-drag-handle]");
+  assert.equal(title.listenerCount("pointerdown"), 1);
+  await controller.close();
+  assert.equal(title.listenerCount("pointerdown"), 0);
+});
+
+test("온보딩은 desktop 제목 drag만 허용하고 위치를 clamp한다", async () => {
+  const documentRef = new FakeDocument();
+  const windowRef = createFakeWindow();
+  const controller = createOnboardingController({ documentRef, windowRef, storage: new FakeStorage(), getCurrentPage: () => "search" });
+  await controller.start();
+  const dialog = documentRef.querySelector("[role=dialog]");
+  const title = documentRef.querySelector("[data-onboarding-drag-handle]");
+  dialog.rect = { left: 100, top: 100, width: 300, height: 200 };
+  const event = { target: title, pointerId: 1, clientX: 120, clientY: 120, preventDefault() { this.prevented = true; } };
+  title.listeners.get("pointerdown")[0](event);
+  title.listeners.get("pointermove")[0]({ target: title, pointerId: 1, clientX: -1000, clientY: -1000 });
+  assert.equal(event.prevented, true);
+  assert.equal(dialog.style.left, "8px");
+  assert.equal(dialog.style.top, "8px");
+  windowRef.innerWidth = 360;
+  windowRef.innerHeight = 640;
+  controller.refreshTarget();
+  assert.equal(dialog.style.left, "");
+  assert.equal(dialog.style.top, "");
+  await controller.close();
 });

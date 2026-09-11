@@ -269,9 +269,12 @@ test("Weki source and packaged release metadata target v1.2.2", () => {
 test("Weki exposes the nine-step onboarding targets in order", () => {
   assert.match(main, /사용 가이드/);
   assert.match(main, /data-onboarding-replay/);
-  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "example-results", "example-evidence", "mybox"]) {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "mybox"]) {
     assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
   }
+  assert.match(onboarding, /data-onboarding-example/);
+  assert.match(onboarding, /example-results/);
+  assert.match(onboarding, /example-evidence/);
   assert.match(onboarding, /role=["']dialog["']/);
   assert.match(onboarding, /aria-modal=["']true["']/);
   assert.match(onboarding, /data-onboarding-progress/);
@@ -284,10 +287,19 @@ test("Weki exposes the nine-step onboarding targets in order", () => {
 });
 
 test("Weki keeps onboarding copy read-only and exposes the compatibility screen targets", () => {
-  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "example-results", "example-evidence", "mybox"]) {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "mybox"]) {
     assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
   }
   assert.match(onboarding, /실제 문서나 설정을 변경하지 않습니다/);
+  assert.match(onboarding, /결과에서 근거로 이어짐/);
+  assert.match(onboarding, /2026년 4월부터/);
+});
+
+test("Weki binds Gemini settings controls through one render path", () => {
+  const renderWrapper = main.slice(main.indexOf("render=function(){"), main.indexOf("onboardingController=createOnboardingController"));
+  assert.doesNotMatch(renderWrapper, /syncGeminiCredentialEditor\(\)/);
+  const settingsSync = main.slice(main.indexOf("function syncGeminiSettings"), main.indexOf("function runtimeInstallMetadata"));
+  assert.equal((settingsSync.match(/syncGeminiCredentialEditor\(\)/g) || []).length, 1);
 });
 
 test("Weki separates installed-model and external-AI defaults from per-document processing choices", () => {
