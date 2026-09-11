@@ -160,7 +160,7 @@ async function assertStep(page, index, pageName, targetName) {
     const target = document.querySelector(`[data-onboarding-target="${expectedTarget}"]`);
     return progress === expectedProgress && activePage && Boolean(target);
   }, {
-    expectedProgress: `${index} / 5`,
+    expectedProgress: `${index} / 9`,
     expectedPage: pageName,
     expectedTarget: targetName,
   });
@@ -180,17 +180,21 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   const { page, mutationRequests, recordMutation } = app;
 
   await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
-  await assertStep(page, 1, "add", "registration-dropzone");
+  await assertStep(page, 1, "add", "registration-screen");
   assert.equal(await page.locator("[role=dialog][aria-modal=true]").count(), 1);
   assert.equal(
     await page.locator("[data-onboarding-scrim]").evaluate((element) => getComputedStyle(element).backgroundColor),
     "rgba(24, 28, 32, 0.42)",
   );
 
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 2, "search", "search-composer");
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 3, "search", "evidence-fallback");
+  for (const [index, pageName, targetName] of [
+    [2, "add", "choose-files"], [3, "add", "registration-mode"], [4, "add", "processing-queue"],
+    [5, "documents", "documents-empty"], [6, "search", "search-composer"], [7, "search", "example-results"],
+    [8, "search", "example-evidence"],
+  ]) {
+    await page.locator("[data-onboarding-next]").click();
+    await assertStep(page, index, pageName, targetName);
+  }
   await page.locator("[role=dialog]").evaluate(async (dialog) => {
     await Promise.all(dialog.getAnimations().map((animation) => animation.finished.catch(() => {})));
   });
@@ -212,10 +216,7 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   assert.ok(fallbackLayout.centeredX <= 2, `fallback dialog is not horizontally centered: ${fallbackLayout.centeredX}px`);
   assert.ok(fallbackLayout.centeredY <= 2, `fallback dialog is not vertically centered: ${fallbackLayout.centeredY}px`);
   await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 4, "settings", "processing-mode");
-  await page.locator("[data-onboarding-next]").click();
-  await assertStep(page, 5, "settings", "mybox");
-
+  await assertStep(page, 9, "settings", "mybox");
   await page.locator("[data-onboarding-next]").click();
   await waitFor("tour completion", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("original search page", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
@@ -232,7 +233,7 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
   await guide.focus();
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-onboarding-replay")), true);
   await guide.click();
-  await assertStep(page, 1, "add", "registration-dropzone");
+  await assertStep(page, 1, "add", "registration-screen");
   await page.keyboard.press("Escape");
   await waitFor("tour Escape close", async () => (await page.locator("#onboarding-root").count()) === 0);
   await waitFor("search page after Escape", async () => (await page.locator('button.nav-item[data-nav="search"]').getAttribute("aria-current")) === "page");
@@ -311,4 +312,27 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
       if (row.action) assert.ok(row.action.right <= mobileLayout.viewportWidth + 1, `${viewport.width}px runtime action is clipped`);
     }
   }
+});
+
+test("onboarding dialog supports title pointer drag with viewport clamping and mobile centering", async (t) => {
+  const app = await launchEmptyApp();
+  t.after(app.cleanup);
+  const { page } = app;
+  await page.waitForSelector("#onboarding-root", { timeout: 15_000 });
+  const title = page.locator("[role=dialog] .onboarding-title");
+  const before = await page.locator("[role=dialog]").boundingBox();
+  await title.dispatchEvent("pointerdown", { clientX: before.x + 10, clientY: before.y + 10, pointerId: 1 });
+  await title.dispatchEvent("pointermove", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  await title.dispatchEvent("pointerup", { clientX: -1000, clientY: -1000, pointerId: 1 });
+  const clamped = await page.locator("[role=dialog]").boundingBox();
+  const viewport = page.viewportSize();
+  assert.ok(clamped.x >= 0 && clamped.y >= 0);
+  assert.ok(clamped.x + clamped.width <= viewport.width && clamped.y + clamped.height <= viewport.height);
+
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.locator("[data-onboarding-close]").click();
+  await page.locator("[data-onboarding-replay]").click();
+  const centered = await page.locator("[role=dialog]").boundingBox();
+  assert.ok(Math.abs(centered.x + centered.width / 2 - 180) <= 2);
+  assert.ok(Math.abs(centered.y + centered.height / 2 - 320) <= 2);
 });

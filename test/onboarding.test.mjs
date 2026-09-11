@@ -34,16 +34,20 @@ class FailingStorage {
   }
 }
 
-test("온보딩은 고정된 키와 5단계 화면·대상 순서를 공개한다", () => {
+test("온보딩은 고정된 키와 9단계 화면·대상 순서를 공개한다", () => {
   assert.equal(ONBOARDING_STORAGE_KEY, "weki.onboarding.v1.completed");
-  assert.equal(ONBOARDING_STEPS.length, 5);
+  assert.equal(ONBOARDING_STEPS.length, 9);
   assert.deepEqual(
     ONBOARDING_STEPS.map(({ page, target }) => ({ page, target })),
     [
-      { page: "add", target: "registration-dropzone" },
+      { page: "add", target: "registration-screen" },
+      { page: "add", target: "choose-files" },
+      { page: "add", target: "registration-mode" },
+      { page: "add", target: "processing-queue" },
+      { page: "documents", target: "documents-empty" },
       { page: "search", target: "search-composer" },
-      { page: "search", target: "evidence-fallback" },
-      { page: "settings", target: "processing-mode" },
+      { page: "search", target: "example-results" },
+      { page: "search", target: "example-evidence" },
       { page: "settings", target: "mybox" },
     ],
   );
@@ -84,15 +88,15 @@ test("온보딩 컨트롤러는 재생 시 1단계에서 시작하고 이전·�
   await controller.start();
   assert.equal(controller.getState().active, true);
   assert.equal(controller.getState().index, 0);
-  assert.equal(controller.getState().step.target, "registration-dropzone");
+  assert.equal(controller.getState().step.target, "registration-screen");
   assert.equal(page, "add");
 
   await controller.previous();
   assert.equal(controller.getState().index, 0);
   await controller.next();
   assert.equal(controller.getState().index, 1);
-  assert.equal(controller.getState().step.target, "search-composer");
-  assert.deepEqual(navigatedPages, ["add", "search"]);
+  assert.equal(controller.getState().step.target, "choose-files");
+  assert.deepEqual(navigatedPages, ["add"]);
 });
 
 test("온보딩 완료와 건너뛰기는 완료 상태를 저장하고 시작 화면으로 복귀한다", async () => {
@@ -445,4 +449,19 @@ test("온보딩 단계 렌더링은 동일 root에 keydown 핸들러를 중복 �
   assert.equal(root.listenerCount("keydown"), 1);
   await controller.previous();
   assert.equal(root.listenerCount("keydown"), 1);
+});
+
+test("온보딩 replay는 이전 완료값과 무관하게 1단계와 중앙 dialog 위치로 초기화한다", async () => {
+  const documentRef = new FakeDocument();
+  const controller = createOnboardingController({
+    documentRef,
+    windowRef: createFakeWindow(),
+    storage: new FakeStorage({ [ONBOARDING_STORAGE_KEY]: "completed" }),
+    getCurrentPage: () => "search",
+  });
+  await controller.start({ replay: true });
+  assert.equal(controller.getState().index, 0);
+  assert.equal(controller.getState().step.target, "registration-screen");
+  const dialog = documentRef.querySelector("#onboarding-root").querySelector("[role=dialog]");
+  assert.equal(dialog?.getAttribute("data-onboarding-position"), "center");
 });

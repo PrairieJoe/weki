@@ -266,10 +266,10 @@ test("Weki source and packaged release metadata target v1.2.2", () => {
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
 });
 
-test("Weki exposes a replayable five-step onboarding tour", () => {
+test("Weki exposes the nine-step onboarding targets in order", () => {
   assert.match(main, /사용 가이드/);
   assert.match(main, /data-onboarding-replay/);
-  for (const target of ["search-composer", "registration-dropzone", "evidence-fallback", "processing-mode", "mybox"]) {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "example-results", "example-evidence", "mybox"]) {
     assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
   }
   assert.match(onboarding, /role=["']dialog["']/);
@@ -281,6 +281,18 @@ test("Weki exposes a replayable five-step onboarding tour", () => {
   assert.match(styles, /--onboarding-scrim:\s*rgba\(24,\s*28,\s*32,\s*0\.42\)/);
   assert.match(styles, /\.onboarding-scrim\{[^}]*background:var\(--onboarding-scrim\)/);
   assert.doesNotMatch(styles, /rgba\(8,\s*12,\s*58/);
+});
+
+test("Weki keeps onboarding copy read-only and exposes the compatibility screen targets", () => {
+  for (const target of ["registration-screen", "choose-files", "registration-mode", "processing-queue", "documents-empty", "search-composer", "example-results", "example-evidence", "mybox"]) {
+    assert.match(main, new RegExp(`data-onboarding-target=["']${target}["']`));
+  }
+  assert.match(onboarding, /실제 문서나 설정을 변경하지 않습니다/);
+});
+
+test("Weki installer retains installation-folder and document-data-location copy", () => {
+  assert.match(installer, /설치 폴더/);
+  assert.match(installer, /문서 데이터 저장 위치/);
 });
 
 test("Weki installer pages share one custom value-entry layout", () => {
