@@ -114,4 +114,10 @@ test("external default reports readiness separately and auto remains local-only"
     localAiEligibilityReason: null,
   });
   assert.equal(resolveProcessingDefault({ defaultProcessingMode: "auto" }, completeRuntime, external).effectiveDefaultMode, "local-ai");
+
+  const globallyOff = { ...external, enabled: false };
+  const offResolution = resolveProcessingDefault({ defaultProcessingMode: "external-ai" }, completeRuntime, globallyOff);
+  assert.equal(offResolution.externalAiReady, false);
+  assert.equal(offResolution.effectiveDefaultMode, "local-ai");
+  assert.equal(offResolution.fallbackReason, "external_ai_disabled");
 });

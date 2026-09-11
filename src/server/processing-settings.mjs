@@ -12,6 +12,7 @@ const SAFE_EXTERNAL_FAILURE_REASONS = new Set([
   "external_ai_provider_error",
   "external_ai_timeout",
   "external_ai_invalid_response",
+  "external_ai_disabled",
 ]);
 
 export function normalizeDefaultProcessingMode(value) {
@@ -29,6 +30,7 @@ function isApplied(component) {
 function externalFailureReason(externalStatus = {}) {
   const requested = externalStatus.failureReason ?? externalStatus.errorCode;
   if (SAFE_EXTERNAL_FAILURE_REASONS.has(requested)) return requested;
+  if (externalStatus.enabled === false) return "external_ai_disabled";
   if (externalStatus.configured === false) return "external_ai_not_configured";
   if (externalStatus.modelSelected === false) return "external_ai_model_not_selected";
   if (externalStatus.connectionStatus === "failed" || externalStatus.lastConnection?.status === "failed") return "external_ai_connection_failed";
@@ -104,13 +106,16 @@ export function resolveProcessingDefault(settings = {}, components = {}, externa
   const localAiEligible = RUNTIME_COMPONENT_IDS.every((id) => isApplied(components[id]));
   const localAiAvailable = semanticModelReady;
   const externalAiEnabled = normalized.defaultProcessingMode === "external-ai";
+  const externalProviderEnabled = externalStatus.enabled !== false;
   const connectionReady = externalStatus.connectionStatus === "ready"
     || externalStatus.lastConnection?.status === "ready"
     || externalStatus.connection?.status === "ready";
   const externalAiReady = Boolean(
-    externalStatus.available
-      || externalStatus.ready
-      || (externalStatus.configured !== false && externalStatus.modelSelected !== false && connectionReady),
+    externalProviderEnabled && (
+      externalStatus.available
+        || externalStatus.ready
+        || (externalStatus.configured !== false && externalStatus.modelSelected !== false && connectionReady)
+    ),
   );
   const externalReason = externalFailureReason(externalStatus);
   let resolved;

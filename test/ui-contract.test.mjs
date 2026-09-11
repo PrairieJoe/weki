@@ -333,6 +333,7 @@ test("Weki exposes the Task 6 local and Gemini settings contract", () => {
   assert.match(main, /window\.wekiAiCredentials\.saveGeminiKey/);
   assert.match(main, /window\.wekiAiCredentials\.clearGeminiKey/);
   assert.match(main, /consentVersion:1/);
+  assert.match(main, /external_ai_disabled/);
   assert.match(main, /외부 AI를 끄면 신규 작업/);
   assert.match(main, /설치된 모델, 경량 처리 순으로 진행됩니다/);
   assert.match(main, /data-gemini-warning/);

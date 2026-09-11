@@ -57,3 +57,25 @@ Fix-round prescribed server contract command:
     PASS (52/54); 2 unrelated existing environment failures
 
 The prescribed run's failures are a concurrent search-server readiness timeout and the missing `test_data/01 시내버스 개편 방향 및 효과, 개편사항.pdf` fixture.
+
+## Cross-task policy fix — global External AI OFF
+
+- External readiness now includes the global `externalAi.enabled` state. OFF therefore reports `ready: false`, `externalAiReady: false`, and the safe `external_ai_disabled` reason even when a key, model, and previously successful connection remain persisted.
+- New explicit `mode: external-ai` document registrations require both consent version `1` and External AI enabled. When OFF, the API returns `409 external_ai_disabled` before creating a job or invoking the provider; no existing snapshot is changed.
+- Registered external jobs continue to execute from their snapshotted policy after settings are switched OFF. The registration snapshot regression now also asserts the safe OFF status while the completed document retains its external provider/model policy and enrichment audit.
+- Kept the per-document lightweight / Local AI / External AI choices intact and mapped the safe server rejection to a clear UI message while preserving the selected files for correction.
+
+Cross-task focused tests:
+
+    node --test test/processing-settings.test.mjs test/ai-settings-api.test.mjs
+    PASS (20/20)
+
+    node --test test/ui-contract.test.mjs
+    PASS (50/50)
+
+Prescribed server contract command:
+
+    node --test test/processing-settings.test.mjs test/ai-settings-api.test.mjs test/search-v2-api.test.mjs
+    PASS (54/55); 1 pre-existing fixture failure
+
+The remaining failure is `PDF image pages expose a visual evidence preview`; this checkout does not contain `test_data/01 시내버스 개편 방향 및 효과, 개편사항.pdf`. The OFF-policy test verified `providerCalls === 0` and an unchanged empty job list.

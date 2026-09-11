@@ -221,6 +221,49 @@ test("explicit external document registration requires consent before queueing",
   assert.deepEqual(stored.jobs, []);
 });
 
+test("global external AI OFF rejects new explicit registration before provider use", async (t) => {
+  let providerCalls = 0;
+  const provider = createServer((_req, res) => {
+    providerCalls += 1;
+    res.statusCode = 500;
+    res.end(JSON.stringify({ error: "provider must not be called while external AI is OFF" }));
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  const secret = "AIza-external-off-policy-secret";
+  const server = await startServer(t, {
+    WEKI_GEMINI_API_KEY: secret,
+    WEKI_GEMINI_API_BASE: `http://127.0.0.1:${provider.address().port}/v1beta`,
+  }, {
+    settings: {
+      defaultProcessingMode: "auto",
+      externalAi: {
+        modelId: "gemini-test",
+        consentVersion: 1,
+        lastConnection: { status: "ready", checkedAt: "2026-09-11T00:00:00.000Z", errorCode: null },
+      },
+    },
+    documents: [], jobs: [], audit: [],
+  });
+  t.after(async () => { await new Promise((resolve) => provider.close(resolve)); });
+
+  const status = await json(await fetch(`http://127.0.0.1:${server.port}/api/status`));
+  assert.equal(status.body.processing.externalAi.enabled, false);
+  assert.equal(status.body.processing.externalAi.ready, false);
+  assert.doesNotMatch(JSON.stringify(status.body), new RegExp(secret));
+
+  const form = new FormData();
+  form.append("mode", "external-ai");
+  form.append("consentVersion", "1");
+  form.append("files", new Blob([await docxFixture("external OFF registration")]), "external-off.docx");
+  const result = await json(await fetch(`http://127.0.0.1:${server.port}/api/documents`, { method: "POST", body: form }));
+
+  assert.equal(result.response.status, 409);
+  assert.equal(result.body.code, "external_ai_disabled");
+  assert.equal(providerCalls, 0);
+  const stored = JSON.parse(await fs.readFile(path.join(server.dataDir, "knowledge-base.json"), "utf8"));
+  assert.deepEqual(stored.jobs, []);
+});
+
 async function waitForDatabase(dataDir, predicate, timeoutMs = 15_000, intervalMs = 100) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -267,7 +310,10 @@ test("external registration snapshots policy across settings OFF and records enr
   const first = await json(await fetch(`http://127.0.0.1:${server.port}/api/documents`, { method: "POST", body: firstForm }));
   assert.equal(first.response.status, 202, JSON.stringify(first.body));
   assert.equal(first.body.processing.effectiveMode, "external-ai");
-  assert.equal((await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "auto" }) })).status, 200);
+  const off = await json(await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultProcessingMode: "auto" }) }));
+  assert.equal(off.response.status, 200);
+  assert.equal(off.body.processing.externalAi.enabled, false);
+  assert.equal(off.body.processing.externalAi.ready, false);
 
   const afterFirst = await waitForDatabase(server.dataDir, (database) => database.documents.some((document) => document.name === "external-snapshot-one.docx"));
   const firstDocument = afterFirst.documents.find((document) => document.name === "external-snapshot-one.docx");

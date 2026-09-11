@@ -841,6 +841,7 @@ const SAFE_EXTERNAL_ERROR_CODES = new Set([
   "external_ai_provider_error",
   "external_ai_timeout",
   "external_ai_invalid_response",
+  "external_ai_disabled",
 ]);
 let externalApiKey = String(process.env.WEKI_GEMINI_API_KEY || "").trim();
 let externalCredentialSync = Promise.resolve();
@@ -888,8 +889,14 @@ function externalAiStatus(settings = {}) {
   const enabled = normalizeDefaultProcessingMode(settings.defaultProcessingMode) === "external-ai";
   const modelSelected = Boolean(external.modelId);
   const connectionReady = external.lastConnection.status === "ready";
-  const ready = configured && modelSelected && connectionReady;
-  const failureReason = configured ? modelSelected ? (external.lastConnection.status === "failed" ? external.lastConnection.errorCode || "external_ai_connection_failed" : "external_ai_connection_failed") : "external_ai_model_not_selected" : "external_ai_not_configured";
+  const ready = enabled && configured && modelSelected && connectionReady;
+  const failureReason = !enabled
+    ? "external_ai_disabled"
+    : configured
+      ? modelSelected
+        ? (external.lastConnection.status === "failed" ? external.lastConnection.errorCode || "external_ai_connection_failed" : "external_ai_connection_failed")
+        : "external_ai_model_not_selected"
+      : "external_ai_not_configured";
   return {
     provider: external.provider,
     configured,
@@ -1439,6 +1446,7 @@ app.post("/api/documents", upload.array("files"), async (req, res) => {
   const processingPolicy = { requestedMode: modeResolution.requestedMode, effectiveMode: modeResolution.effectiveMode, provider: modeResolution.provider, modelId: modeResolution.modelId, fallbackReason: modeResolution.fallbackReason };
   const consentVersion = Number(req.body?.consentVersion ?? (typeof req.body?.externalAi === "object" ? req.body.externalAi?.consentVersion : null));
   if (hasExplicitMode && requestedMode === "external-ai" && consentVersion !== 1) return res.status(409).json({ error: "external_ai_consent_required", code: "external_ai_consent_required" });
+  if (hasExplicitMode && requestedMode === "external-ai" && !external.enabled) return res.status(409).json({ error: "external_ai_disabled", code: "external_ai_disabled" });
   if (db.maintenance) return res.status(409).json({ error: "Maintenance 작업 중에는 문서 등록을 시작할 수 없습니다." }); const results = [];
   for (const file of req.files || []) {
     const fileName = normalizeFilename(file.originalname); const ext = path.extname(fileName).slice(1).toLowerCase();
