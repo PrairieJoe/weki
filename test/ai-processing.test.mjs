@@ -9,15 +9,23 @@ test("generated metadata is validated and auxiliary search text is deterministic
 });
 
 test("AI metadata is auxiliary only and preserves original searchable fields and evidence", async () => {
-  const { buildSearchAuxiliaryText } = await import("../src/processing/ai-processing.mjs");
+  const { indexDocumentUnits } = await import("../src/processing/ai-processing.mjs");
   const page = {
     text: "original text", nativeText: "native text", ocrText: "ocr text",
     evidence: [{ type: "text", text: "evidence" }],
     metadata: { title: "Generated title", summary: "Generated summary", tags: ["tag"] },
   };
   const original = structuredClone(page);
-  const auxiliary = buildSearchAuxiliaryText(page.metadata);
+  const indexed = [];
+  await indexDocumentUnits({
+    document: { id: "doc-1" },
+    units: [page],
+    generateMetadata: async () => page.metadata,
+    indexUnit: async (unit) => indexed.push(unit),
+  });
+  const auxiliary = indexed[0].auxiliaryText;
   assert.equal(auxiliary, "Generated title\nGenerated summary\ntag");
+  assert.deepEqual(Object.keys(indexed[0]).sort(), ["auxiliaryText", "evidence", "nativeText", "ocrText", "text"]);
   assert.deepEqual(page, original);
   assert.notEqual(auxiliary, page.text);
   assert.equal(page.nativeText, "native text");

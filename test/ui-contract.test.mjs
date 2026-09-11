@@ -291,15 +291,16 @@ test("Weki keeps onboarding copy read-only and exposes the compatibility screen 
 });
 
 test("Weki separates installed-model and external-AI defaults from per-document processing choices", () => {
-  const defaultControl = main.match(/function syncProcessingDefaultControls\(\).*?\n}\n/s)?.[0] || "";
-  assert.match(defaultControl, /default-processing-mode/);
-  assert.match(defaultControl, /local-ai/);
-  assert.match(defaultControl, /external-ai/);
-  assert.doesNotMatch(defaultControl, /value="lightweight"/);
-  const registration = main.match(/function addPage\(\).*?\n}\n/s)?.[0] || "";
-  assert.match(registration, /value="lightweight"/);
-  assert.match(registration, /value="local-ai"/);
-  assert.match(registration, /value="external-ai"/);
+  const defaultStart = main.indexOf("function syncProcessingDefaultControls");
+  const defaultEnd = main.indexOf("function runtimeInstallMetadata", defaultStart);
+  const defaultControl = defaultStart >= 0 && defaultEnd >= 0 ? main.slice(defaultStart, defaultEnd) : "";
+  const defaultChoices = [...defaultControl.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(defaultChoices, ["installed-model", "external-ai"]);
+  const registrationStart = main.indexOf("function addPage");
+  const registrationEnd = main.indexOf("function settingsPage", registrationStart);
+  const registration = registrationStart >= 0 && registrationEnd >= 0 ? main.slice(registrationStart, registrationEnd) : "";
+  const perDocumentModes = [...registration.matchAll(/<input[^>]+value="([^"]+)"[^>]+name="mode"/g)].map((match) => match[1]);
+  assert.deepEqual(perDocumentModes, ["lightweight", "local-ai", "external-ai"]);
 });
 
 test("Weki installer keeps installation-folder copy on the program page and data-location copy on the data page", () => {

@@ -194,12 +194,12 @@ test("fixture-free Electron onboarding tour completes, suppresses, replays, and 
     [5, "documents", "documents-empty"], [6, "search", "search-composer"], [7, "search", "example-results"],
     [8, "search", "example-evidence"],
   ]) {
+    const requestCountBeforeTransition = requestLog.length;
     await page.locator("[data-onboarding-next]").click();
     await assertStep(page, index, pageName, targetName);
     if (index === 7 || index === 8) {
-      const requestCount = requestLog.length;
       await new Promise((resolve) => setTimeout(resolve, 250));
-      assert.equal(requestLog.length, requestCount, `step ${index} issued fetches while displayed`);
+      assert.equal(requestLog.length, requestCountBeforeTransition, `step ${index} issued fetches during transition or while displayed`);
     }
   }
   await page.locator("[role=dialog]").evaluate(async (dialog) => {
