@@ -42,7 +42,7 @@ export async function createDocumentRenderer({ componentPath }) {
               ocrText = [ocrText, renderedOcrText].filter(Boolean).filter((value, valueIndex, list) => list.indexOf(value) === valueIndex).join(" ");
             } catch { /* Native page text remains searchable when rendered OCR is unavailable. */ }
           }
-          pages.push({ page: index + 1, text: [text, ocrText].filter(Boolean).filter((value, valueIndex, list) => list.indexOf(value) === valueIndex).join(" "), nativeText: text, ocrText, renderedSvg, rendererStatus: "document-renderer", visualAssets: (embeddedAssets.length || ocrText) && renderedSvg ? [{ name: `page-${index + 1}.svg`, mime: "image/svg+xml", ocrText, text: ocrText, source: "rendered-page", embeddedAssets: embeddedAssets.map(({ bytes: _bytes, ...asset }) => asset) }] : [] });
+          pages.push({ page: index + 1, text: [text, ocrText].filter(Boolean).filter((value, valueIndex, list) => list.indexOf(value) === valueIndex).join(" "), nativeText: text, ocrText, renderedSvg, rendererStatus: "document-renderer", visualAssets: (embeddedAssets.length || ocrText) && renderedSvg ? [{ name: `page-${index + 1}.svg`, mime: "image/svg+xml", mimeType: "image/svg+xml", bytes: Buffer.from(renderedSvg), importance: 100, ocrText, text: ocrText, source: "rendered-page", embeddedAssets: embeddedAssets.map((asset) => ({ ...asset, importance: asset.importance ?? 50 })) }] : [] });
           await options.onUnit?.(index + 1, pageCount);
         }
         if (!pages.length) throw new Error("renderer returned no physical pages");

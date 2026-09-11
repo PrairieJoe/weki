@@ -19,6 +19,7 @@ export function extractRenderedSvgVisualAssets(svg, { page = 1 } = {}) {
       return [{
         name: `page-${Number(page) || 1}-image-${index + 1}.${extensionForMime(mime)}`,
         mime,
+        mimeType: mime,
         bytes: Buffer.from(match[3], "base64"),
         source: "rendered-page",
         page: Number(page) || 1,
@@ -47,7 +48,7 @@ function assetPaths(files, format) {
   }).sort();
 }
 
-export async function collectZipVisualAssets(zip, format, { recognize } = {}) {
+export async function collectZipVisualAssets(zip, format, { recognize, preserveBytes = false } = {}) {
   const normalizedFormat = String(format || "").toLowerCase();
   const paths = assetPaths(Object.keys(zip?.files || {}), normalizedFormat);
   const assets = [];
@@ -58,7 +59,8 @@ export async function collectZipVisualAssets(zip, format, { recognize } = {}) {
       const bytes = await file.async("nodebuffer");
       const name = assetPath.split(/[\\/]/u).pop();
       const ocrText = typeof recognize === "function" ? String(await recognize(bytes) || "").replace(/\s+/gu, " ").trim() : "";
-      assets.push({ name, mime: mimeFor(name), ocrText });
+      const mime = mimeFor(name);
+      assets.push({ name, mime, ocrText, ...(preserveBytes ? { mimeType: mime, bytes } : {}) });
     } catch {
       // A damaged visual asset is omitted while the surrounding document remains searchable.
     }

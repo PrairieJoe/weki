@@ -32,6 +32,7 @@ import { createDocumentRenderer } from "./src/processing/document-renderer.mjs";
 import { collectZipVisualAssets } from "./src/processing/visual-assets.mjs";
 import { buildVisualContext } from "./src/processing/visual-context.mjs";
 import { buildPdfVisualAsset, hasPdfVisualContent, renderPdfPagePng } from "./src/processing/pdf-visual.mjs";
+import { stripEphemeralImageData } from "./src/server/ai-processing.mjs";
 import { getComponentState, installComponent, persistComponentFailure, retryComponent, validateManifest } from "./src/runtime/components.mjs";
 import { createRuntimeEmbeddingProvider } from "./src/runtime/embedding.mjs";
 import { createRuntimeRerankerProvider } from "./src/runtime/reranker.mjs";
@@ -130,7 +131,7 @@ async function readDb() {
   return db;
 }
 const persistableDatabase = (db) => {
-  const next = JSON.parse(JSON.stringify(db));
+  const next = JSON.parse(JSON.stringify(stripEphemeralImageData(db)));
   for (const doc of next.documents || []) { doc.originalKey = documentOriginalKey(doc); delete doc.originalPath; }
   return next;
 };
@@ -209,9 +210,10 @@ async function extractPdf(buffer, options = {}) {
       const operatorList = await page.getOperatorList();
       const viewport = page.getViewport({ scale: 1.5 }); const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
       await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-      const { data: { text: ocrText } } = await worker.recognize(canvas.toBuffer("image/png"));
+      const renderedBytes = canvas.toBuffer("image/png");
+      const { data: { text: ocrText } } = await worker.recognize(renderedBytes);
       const normalizedOcr = ocrText.replace(/\s+/g, " ").trim();
-      const visualAssets = hasPdfVisualContent(operatorList) ? [buildPdfVisualAsset({ page: pageNo, bytes: canvas.toBuffer("image/png"), ocrText: normalizedOcr })] : [];
+      const visualAssets = hasPdfVisualContent(operatorList) ? [buildPdfVisualAsset({ page: pageNo, bytes: renderedBytes, ocrText: normalizedOcr })] : [];
       pages.push({ page: pageNo, text: [nativeText, normalizedOcr].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index).join(" "), nativeText, ocrText: normalizedOcr, visualAssets });
       await options.onUnit?.(pageNo, pdf.numPages);
     }
@@ -240,9 +242,11 @@ async function extractZip(buffer, ext, options = {}) {
           const asset = zip.file(`ppt/media/${target}`);
           if (!asset) continue;
           try {
-            const { data: { text } } = await worker.recognize(await asset.async("nodebuffer"));
+            const bytes = await asset.async("nodebuffer");
+            const { data: { text } } = await worker.recognize(bytes);
             const visualText = text.replace(/\s+/g, " ").trim(); if (visualText) parts.push(visualText);
-            assets.push({ name: target, text: visualText, mime: target.match(/\.png$/i) ? "image/png" : target.match(/\.webp$/i) ? "image/webp" : "image/jpeg" });
+            const mimeType = target.match(/\.png$/i) ? "image/png" : target.match(/\.webp$/i) ? "image/webp" : "image/jpeg";
+            assets.push({ name: target, text: visualText, mime: mimeType, mimeType, bytes });
           } catch { /* Unsupported or damaged visual assets remain a documented partial OCR failure. */ }
         }
         slideOcr.set(slidePath, parts.join(" "));
@@ -253,7 +257,7 @@ async function extractZip(buffer, ext, options = {}) {
   if (["docx", "hwpx"].includes(ext)) {
     const worker = await createLocalOcrWorker();
     try {
-      const assets = await collectZipVisualAssets(zip, ext, { recognize: async (bytes) => (await worker.recognize(bytes)).data.text });
+      const assets = await collectZipVisualAssets(zip, ext, { recognize: async (bytes) => (await worker.recognize(bytes)).data.text, preserveBytes: true });
       if (assets.length && paths[0]) {
         slideAssets.set(paths[0], assets.map((asset) => ({ ...asset, text: asset.ocrText })));
         slideOcr.set(paths[0], assets.map((asset) => asset.ocrText).filter(Boolean).join(" "));
@@ -324,10 +328,11 @@ const embedding = (text, dimensions = 128) => {
 };
 const cosine = (left, right) => left.reduce((sum, value, index) => sum + value * right[index], 0);
 const makeUnits = (pages) => pages.flatMap((page) => {
-  const textUnit = page.text ? { id: crypto.randomUUID(), range: page.page, text: page.nativeText || page.text, nativeText: page.nativeText || page.text, ocrText: page.ocrText || "", embedding: embedding(page.nativeText || page.text), evidenceType: "text" } : null;
+  const auxiliaryFields = page.generatedMetadata ? { generatedMetadata: page.generatedMetadata, searchAuxiliaryText: page.searchAuxiliaryText || "" } : {};
+  const textUnit = page.text ? { id: crypto.randomUUID(), range: page.page, text: page.nativeText || page.text, nativeText: page.nativeText || page.text, ocrText: page.ocrText || "", embedding: embedding(`${page.nativeText || page.text} ${page.searchAuxiliaryText || ""}`), evidenceType: "text", ...auxiliaryFields } : null;
   const nearbyText = buildVisualContext(page);
-  const visualUnits = (page.visualAssets || []).filter((asset) => asset.text || asset.ocrText || asset.name).map((asset) => ({ id: crypto.randomUUID(), range: page.page, text: asset.text || asset.ocrText || "", nativeText: "", ocrText: asset.text || asset.ocrText || "", embedding: embedding(asset.text || asset.ocrText || ""), evidenceType: "visual", visualAssetName: asset.name, visualMime: asset.mime, visualNearbyText: nearbyText }));
-  const tableUnits = (page.tableText || []).map((text) => ({ id: crypto.randomUUID(), range: page.page, text, nativeText: text, ocrText: "", embedding: embedding(text), evidenceType: "table" }));
+  const visualUnits = (page.visualAssets || []).filter((asset) => asset.text || asset.ocrText || asset.name).map((asset) => ({ id: crypto.randomUUID(), range: page.page, text: asset.text || asset.ocrText || "", nativeText: "", ocrText: asset.text || asset.ocrText || "", embedding: embedding(`${asset.text || asset.ocrText || ""} ${page.searchAuxiliaryText || ""}`), evidenceType: "visual", visualAssetName: asset.name, visualMime: asset.mime, visualNearbyText: nearbyText, ...auxiliaryFields }));
+  const tableUnits = (page.tableText || []).map((text) => ({ id: crypto.randomUUID(), range: page.page, text, nativeText: text, ocrText: "", embedding: embedding(`${text} ${page.searchAuxiliaryText || ""}`), evidenceType: "table", ...auxiliaryFields }));
   return [textUnit, ...tableUnits, ...visualUnits].filter(Boolean);
 });
 const activeJobs = (db) => db.jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
@@ -397,11 +402,11 @@ const tokens = (query) => query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || [];
 function search(db, query) {
   const terms = tokens(query); const queryEmbedding = embedding(query);
   return db.documents.filter((doc) => ["completed", "partial"].includes(doc.processingStatus)).flatMap((doc) => doc.units.map((unit) => {
-    if (!matchesRouteConstraints(query, [unit.text, unit.nativeText, unit.ocrText, doc.name])) return null;
-    const haystack = `${unit.text} ${doc.name}`.toLowerCase();
+    if (!matchesRouteConstraints(query, [unit.text, unit.nativeText, unit.ocrText, unit.searchAuxiliaryText, doc.name])) return null;
+    const haystack = `${unit.text} ${unit.searchAuxiliaryText || ""} ${doc.name}`.toLowerCase();
     const hits = terms.filter((term) => haystack.includes(term));
     const lexical = terms.length ? Math.round((hits.length / terms.length) * 70) : 0;
-    const semantic = Math.round(Math.max(0, cosine(queryEmbedding, unit.embedding || embedding(unit.text))) * 30);
+    const semantic = Math.round(Math.max(0, cosine(queryEmbedding, unit.embedding || embedding(`${unit.text} ${unit.searchAuxiliaryText || ""}`))) * 30);
     const frequency = hits.reduce((count, term) => count + (haystack.match(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))?.length || 0), 0);
     const locationPrefix = doc.format === "HWP" ? "섹션" : doc.format === "PPTX" ? "슬라이드" : "p.";
     const evidenceOrigin = unit.evidenceType === "visual" ? "ocr" : unit.evidenceType === "table" ? "native" : unit.nativeText && unit.ocrText ? "native+ocr" : unit.ocrText ? "ocr" : "native";
@@ -615,11 +620,11 @@ async function syncDocumentToV2(document, { rebuildAnn = true, store = v2Store, 
       const indexedUnitId = `${unit.id}:${fragment.id}`;
       let vector = null;
       if (embeddingProvider?.available) {
-        try { vector = await embeddingProvider.embed(`${document.name} ${unit.heading || ""} ${fragment.context || ""}`, "passage"); } catch { /* Semantic indexing remains optional; lexical indexing is authoritative. */ }
+        try { vector = await embeddingProvider.embed(`${document.name} ${unit.heading || ""} ${fragment.context || ""} ${unit.searchAuxiliaryText || ""}`, "passage"); } catch { /* Semantic indexing remains optional; lexical indexing is authoritative. */ }
       }
       entries.push({
         evidence: { id: fragment.id, documentId: document.id, pageStart: fragment.pageStart, pageEnd: fragment.pageEnd, type: fragment.type, origin: fragment.origin, assetName: fragment.assetName || null, context: fragment.context },
-        unit: { id: indexedUnitId, documentId: document.id, title: document.name, heading: unit.heading || "", text: fragment.context || "", nativeText: unit.nativeText || "", ocrText: unit.ocrText || "", sourceRange: unit.range, evidenceIds: [fragment.id] },
+        unit: { id: indexedUnitId, documentId: document.id, title: document.name, heading: unit.heading || "", text: fragment.context || "", nativeText: unit.nativeText || "", ocrText: unit.ocrText || "", generatedMetadata: unit.generatedMetadata, searchAuxiliaryText: unit.searchAuxiliaryText || "", sourceRange: unit.range, evidenceIds: [fragment.id] },
         embedding: vector ? { vector, dimension: vector.length, model: "multilingual-e5-small", generation: String(document.updatedAt || document.registeredAt || "active") } : null,
       });
     }
@@ -710,7 +715,7 @@ function sourceDatabaseGeneration(documents) {
     hash: document.hash,
     updatedAt: document.updatedAt,
     registeredAt: document.registeredAt,
-    units: (document.units || []).map((unit) => ({ id: unit.id, range: unit.range, text: unit.text, nativeText: unit.nativeText, ocrText: unit.ocrText, evidenceType: unit.evidenceType, visualAssetName: unit.visualAssetName })),
+    units: (document.units || []).map((unit) => ({ id: unit.id, range: unit.range, text: unit.text, nativeText: unit.nativeText, ocrText: unit.ocrText, evidenceType: unit.evidenceType, visualAssetName: unit.visualAssetName, generatedMetadata: unit.generatedMetadata ? { summary: unit.generatedMetadata.summary, topic: unit.generatedMetadata.topic, keywords: unit.generatedMetadata.keywords, visualDescriptions: unit.generatedMetadata.visualDescriptions } : null, searchAuxiliaryText: unit.searchAuxiliaryText || "" })),
   })))).digest("hex");
 }
 const sourceGeneration = sourceDatabaseGeneration(databaseForIndex.documents || []);
