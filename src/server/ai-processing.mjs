@@ -1,7 +1,9 @@
 import {
   buildGeminiPageInput as capGeminiPageInput,
+  GEMINI_SUPPORTED_IMAGE_MIME_TYPES,
   validateGeneratedMetadata,
 } from "./gemini-provider.mjs";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 export { validateGeneratedMetadata };
 
@@ -32,7 +34,37 @@ function imageBytes(asset) {
   return null;
 }
 
-export function buildGeminiPageInput(page = {}) {
+function imageMimeType(asset) {
+  return typeof asset?.mimeType === "string" ? asset.mimeType.toLowerCase() : String(asset?.mime || "").toLowerCase();
+}
+
+async function normalizeProviderAsset(asset) {
+  const bytes = imageBytes(asset);
+  if (!bytes) return { excludedReason: "image_bytes_missing" };
+  const mimeType = imageMimeType(asset);
+  if (GEMINI_SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType)) return { asset: { ...asset, mimeType, bytes } };
+  try {
+    const image = await loadImage(bytes);
+    const canvas = createCanvas(image.width, image.height);
+    canvas.getContext("2d").drawImage(image, 0, 0);
+    return { asset: { ...asset, mime: "image/png", mimeType: "image/png", bytes: canvas.toBuffer("image/png") } };
+  } catch {
+    return { excludedReason: "image_conversion_failed" };
+  }
+}
+
+async function normalizeProviderAssets(page) {
+  const normalized = [];
+  const excludedImageReasons = [];
+  for (const asset of flattenVisualAssets(page.visualAssets)) {
+    const result = await normalizeProviderAsset(asset);
+    if (result.asset) normalized.push(result.asset);
+    else excludedImageReasons.push(result.excludedReason);
+  }
+  return { assets: normalized, excludedImageReasons };
+}
+
+export function buildGeminiPageInput(page = {}, { encodeImage } = {}) {
   const prioritizedAssets = flattenVisualAssets(page.visualAssets)
     .map((asset, index) => ({ asset, index, importance: Number.isFinite(Number(asset.importance)) ? Number(asset.importance) : 0 }))
     .sort((left, right) => right.importance - left.importance || left.index - right.index);
@@ -40,9 +72,9 @@ export function buildGeminiPageInput(page = {}) {
     const bytes = imageBytes(asset);
     const mimeType = typeof asset.mimeType === "string" ? asset.mimeType : asset.mime;
     if (!bytes || typeof mimeType !== "string") return [];
-    return [{ name: typeof asset.name === "string" ? asset.name : "", mimeType, base64: bytes.toString("base64") }];
+    return [{ name: typeof asset.name === "string" ? asset.name : "", mimeType, bytes }];
   });
-  return capGeminiPageInput({ page: page.page ?? page.number, text: page.text, images });
+  return capGeminiPageInput({ page: page.page ?? page.number, text: page.text, images, ...(encodeImage ? { encodeImage } : {}) });
 }
 
 export function buildSearchAuxiliaryText(metadata) {
@@ -91,6 +123,7 @@ function auditFor(page, provider, payload, timestamp, status, errorCode = null) 
   };
   const fallback = safeAuditValue(page?.processingModeFallback, null);
   if (fallback) audit.processingModeFallback = fallback;
+  if (payload.excludedImageReasons?.length) audit.excludedImageReasons = payload.excludedImageReasons.slice(0, 16);
   return audit;
 }
 
@@ -99,7 +132,10 @@ export async function enrichPagesForSearch(pages, { provider, now = () => new Da
   const enrichedPages = [];
   const audits = [];
   for (const page of Array.isArray(pages) ? pages : []) {
-    const payload = buildGeminiPageInput(page);
+    const normalized = await normalizeProviderAssets(page);
+    const payload = buildGeminiPageInput({ ...page, visualAssets: normalized.assets });
+    payload.excludedImageCount += normalized.excludedImageReasons.length;
+    payload.excludedImageReasons = [...normalized.excludedImageReasons, ...(payload.excludedImageReasons || [])];
     const timestamp = now();
     let nextPage = stripEphemeralImageData(page);
     let audit;

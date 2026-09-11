@@ -10,6 +10,7 @@ export const GEMINI_MAX_TOPIC_CHARS = 200;
 export const GEMINI_MAX_KEYWORD_CHARS = 100;
 export const GEMINI_MAX_VISUAL_DESCRIPTION_CHARS = 1_000;
 export const GEMINI_MAX_ASSET_NAME_CHARS = 255;
+export const GEMINI_SUPPORTED_IMAGE_MIME_TYPES = Object.freeze(["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"]);
 
 const GEMINI_ENRICH_INSTRUCTION = "Return JSON with exactly these fields: summary, topic, keywords, and visualDescriptions for the supplied page.";
 
@@ -68,25 +69,45 @@ function base64ByteLength(value) {
   return Math.floor(normalized.length * 3 / 4) - padding;
 }
 
-export function buildGeminiPageInput({ page, text, images } = {}) {
+function byteLength(image) {
+  if (Buffer.isBuffer(image?.bytes)) return image.bytes.byteLength;
+  if (image?.bytes instanceof Uint8Array) return image.bytes.byteLength;
+  return typeof image?.base64 === "string" ? base64ByteLength(image.base64) : Infinity;
+}
+
+export function buildGeminiPageInput({ page, text, images, encodeImage = (bytes) => Buffer.from(bytes).toString("base64") } = {}) {
   const sourceImages = Array.isArray(images) ? images : [];
   const selectedImages = [];
+  const excludedImageReasons = [];
   let totalImageBytes = 0;
   let excludedImageCount = 0;
   for (const image of sourceImages) {
-    const imageBytes = typeof image?.base64 === "string" && typeof image?.mimeType === "string" ? base64ByteLength(image.base64) : Infinity;
+    const mimeType = typeof image?.mimeType === "string" ? image.mimeType.toLowerCase() : "";
+    if (!GEMINI_SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType)) {
+      excludedImageCount += 1;
+      excludedImageReasons.push("unsupported_image_mime");
+      continue;
+    }
+    const imageBytes = byteLength(image);
     if (
       selectedImages.length >= GEMINI_MAX_IMAGES
       || imageBytes > GEMINI_MAX_IMAGE_BYTES
       || totalImageBytes + imageBytes > GEMINI_MAX_TOTAL_IMAGE_BYTES
     ) {
       excludedImageCount += 1;
+      excludedImageReasons.push(selectedImages.length >= GEMINI_MAX_IMAGES ? "image_count_cap" : "image_byte_cap");
+      continue;
+    }
+    const base64 = typeof image.base64 === "string" ? image.base64 : encodeImage(image.bytes);
+    if (typeof base64 !== "string") {
+      excludedImageCount += 1;
+      excludedImageReasons.push("image_encoding_failed");
       continue;
     }
     selectedImages.push({
       name: typeof image.name === "string" ? image.name : "",
-      mimeType: image.mimeType,
-      base64: image.base64,
+      mimeType,
+      base64,
     });
     totalImageBytes += imageBytes;
   }
@@ -96,6 +117,7 @@ export function buildGeminiPageInput({ page, text, images } = {}) {
     text: typeof text === "string" ? text.slice(0, GEMINI_MAX_TEXT_UTF16_CHARS) : "",
     images: selectedImages,
     excludedImageCount,
+    excludedImageReasons,
     includedImageCount: selectedImages.length,
     totalImageBytes,
   };
@@ -167,7 +189,9 @@ export function createGeminiProvider({
     body: JSON.stringify(body),
   });
 
-  return {
+  return Object.freeze({
+    provider: "gemini",
+    modelId: modelId ?? null,
     async listModels() {
       const response = await request("/models");
       if (!Array.isArray(response.models)) throw providerError("external_ai_invalid_response");
@@ -205,5 +229,5 @@ export function createGeminiProvider({
         }
       }
     },
-  };
+  });
 }

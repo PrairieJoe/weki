@@ -238,3 +238,148 @@ test("SQLite persists generated metadata separately and matches auxiliary text w
   assert.equal(response.contextPack.citations[0].text, "authoritative original evidence");
   assert.doesNotMatch(JSON.stringify(response.results[0].matchedEvidence), /rare auxiliary/u);
 });
+
+function bmpFixture() {
+  const bytes = Buffer.alloc(58);
+  bytes.write("BM", 0, "ascii");
+  bytes.writeUInt32LE(58, 2);
+  bytes.writeUInt32LE(54, 10);
+  bytes.writeUInt32LE(40, 14);
+  bytes.writeInt32LE(1, 18);
+  bytes.writeInt32LE(1, 22);
+  bytes.writeUInt16LE(1, 26);
+  bytes.writeUInt16LE(24, 28);
+  bytes.writeUInt32LE(4, 34);
+  bytes.writeUInt32LE(2835, 38);
+  bytes.writeUInt32LE(2835, 42);
+  bytes[54] = 255;
+  return bytes;
+}
+
+function tiffFixture() {
+  const bytes = Buffer.alloc(195);
+  bytes.writeUInt16LE(0x4949, 0);
+  bytes.writeUInt16LE(42, 2);
+  bytes.writeUInt32LE(8, 4);
+  bytes.writeUInt16LE(13, 8);
+  const entries = [
+    [256, 3, 1, 1],
+    [257, 3, 1, 1],
+    [258, 3, 3, 170],
+    [259, 3, 1, 1],
+    [262, 3, 1, 2],
+    [273, 4, 1, 192],
+    [277, 3, 1, 3],
+    [278, 4, 1, 1],
+    [279, 4, 1, 3],
+    [282, 5, 1, 176],
+    [283, 5, 1, 184],
+    [284, 3, 1, 1],
+  ];
+  for (const [index, [tag, type, count, value]] of entries.entries()) {
+    const offset = 10 + index * 12;
+    bytes.writeUInt16LE(tag, offset);
+    bytes.writeUInt16LE(type, offset + 2);
+    bytes.writeUInt32LE(count, offset + 4);
+    if (type === 3 && count === 1) bytes.writeUInt16LE(value, offset + 8);
+    else bytes.writeUInt32LE(value, offset + 8);
+  }
+  bytes.writeUInt32LE(0, 166);
+  bytes.writeUInt16LE(8, 170);
+  bytes.writeUInt16LE(8, 172);
+  bytes.writeUInt16LE(8, 174);
+  bytes.writeUInt32LE(72, 176);
+  bytes.writeUInt32LE(1, 180);
+  bytes.writeUInt32LE(72, 184);
+  bytes.writeUInt32LE(1, 188);
+  bytes[192] = 255;
+  return bytes;
+}
+
+test("real Gemini enrichment sends only supported raster MIME types after converting or excluding SVG/BMP/TIFF", async () => {
+  const { createGeminiProvider } = await import("../src/server/gemini-provider.mjs");
+  const { enrichPagesForSearch } = await import("../src/server/ai-processing.mjs");
+  const requests = [];
+  const provider = createGeminiProvider({
+    apiKey: "secret-api-key",
+    modelId: "gemini-test",
+    baseUrl: "https://gemini.test/v1beta",
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"summary":"ok","topic":"topic","keywords":[],"visualDescriptions":[]}' }] } }] }));
+    },
+  });
+  const page = {
+    documentId: "doc-raster",
+    page: 1,
+    text: "source text",
+    nativeText: "source native",
+    ocrText: "source OCR",
+    evidence: [{ id: "source-evidence", pageStart: 1, pageEnd: 1, context: "source evidence" }],
+    visualAssets: [
+      { name: "diagram.svg", mime: "image/svg+xml", bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>') },
+      { name: "pixel.bmp", mime: "image/bmp", bytes: bmpFixture() },
+      { name: "scan.tiff", mime: "image/tiff", bytes: tiffFixture() },
+    ],
+  };
+  const originalAssets = page.visualAssets.map((asset) => ({ name: asset.name, bytes: Buffer.from(asset.bytes) }));
+
+  const result = await enrichPagesForSearch([page], { provider, now: () => "2026-09-11T03:04:05.000Z" });
+
+  const inlineImages = requests[0].contents[0].parts.filter((part) => part.inlineData).map((part) => part.inlineData);
+  assert.equal(inlineImages.length, 2);
+  assert.ok(inlineImages.every(({ mimeType }) => ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"].includes(mimeType)));
+  assert.ok(inlineImages.every(({ mimeType, data }) => mimeType !== "image/png" || Buffer.from(data, "base64").subarray(0, 8).toString("hex") === "89504e470d0a1a0a"));
+  assert.deepEqual(page.visualAssets.map((asset) => ({ name: asset.name, bytes: asset.bytes })), originalAssets);
+  assert.deepEqual(result.pages[0].visualAssets.map(({ name }) => name), ["diagram.svg", "pixel.bmp", "scan.tiff"]);
+  assert.equal(result.audits[0].model, "gemini-test");
+  assert.ok(result.audits[0].excludedImageCount >= 1);
+  assert.ok(result.audits[0].excludedImageReasons.includes("image_conversion_failed"));
+  assert.doesNotMatch(JSON.stringify(requests[0]), /image\/svg\+xml|image\/bmp|image\/tiff/u);
+});
+
+test("real Gemini provider identity is immutable and is retained in success and failure audits", async () => {
+  const { createGeminiProvider } = await import("../src/server/gemini-provider.mjs");
+  const { enrichPagesForSearch } = await import("../src/server/ai-processing.mjs");
+  const provider = createGeminiProvider({
+    apiKey: "secret-api-key",
+    modelId: "gemini-test",
+    baseUrl: "https://gemini.test/v1beta",
+    fetchImpl: async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"summary":"ok","topic":"topic","keywords":[],"visualDescriptions":[]}' }] } }] })),
+  });
+
+  assert.equal(provider.provider, "gemini");
+  assert.equal(provider.modelId, "gemini-test");
+  assert.equal(Object.isFrozen(provider), true);
+  const success = await enrichPagesForSearch([{ documentId: "doc", page: 1, text: "text" }], { provider, now: () => "2026-09-11T04:05:06.000Z" });
+  const failure = await enrichPagesForSearch([{ documentId: "doc", page: 2, text: "text" }], {
+    provider: Object.freeze({ ...provider, async enrichPage() { throw Object.assign(new Error("provider failure"), { code: "external_ai_timeout" }); } }),
+    now: () => "2026-09-11T04:05:07.000Z",
+  });
+  assert.equal(success.audits[0].model, "gemini-test");
+  assert.equal(failure.audits[0].model, "gemini-test");
+});
+
+test("buildGeminiPageInput encodes only assets selected by byte and count caps", async () => {
+  const { buildGeminiPageInput } = await import("../src/server/ai-processing.mjs");
+  let encoded = 0;
+  const page = {
+    page: 9,
+    text: "text",
+    visualAssets: [
+      image("too-large.png", GEMINI_MAX_IMAGE_BYTES + 1, 100),
+      image("one.png", GEMINI_MAX_IMAGE_BYTES, 90),
+      image("two.png", GEMINI_MAX_IMAGE_BYTES, 80),
+      image("three.png", GEMINI_MAX_IMAGE_BYTES, 70),
+      image("four.png", GEMINI_MAX_IMAGE_BYTES, 60),
+      image("excluded-by-count.png", 1, 50),
+    ],
+  };
+
+  const input = buildGeminiPageInput(page, { encodeImage: (bytes) => { encoded += 1; return bytes.toString("base64"); } });
+
+  assert.equal(encoded, 4);
+  assert.deepEqual(input.images.map(({ name }) => name), ["one.png", "two.png", "three.png", "four.png"]);
+  assert.equal(input.excludedImageCount, 2);
+  assert.equal(input.totalImageBytes, 8 * 1024 * 1024);
+});
