@@ -14,6 +14,10 @@ test("processing settings default to automatic lightweight processing until all 
   assert.deepEqual(resolveProcessingDefault(), {
     defaultMode: "auto",
     effectiveDefaultMode: "lightweight",
+    localAiAvailable: false,
+    externalAiEnabled: false,
+    externalAiReady: false,
+    fallbackReason: "runtime_components_incomplete",
     localAiEligible: false,
     localAiEligibilityReason: "runtime_components_incomplete",
   });
@@ -24,6 +28,10 @@ test("automatic processing switches new work to Local AI after all packs apply",
   assert.deepEqual(resolveProcessingDefault({}, completeRuntime), {
     defaultMode: "auto",
     effectiveDefaultMode: "local-ai",
+    localAiAvailable: true,
+    externalAiEnabled: false,
+    externalAiReady: false,
+    fallbackReason: null,
     localAiEligible: true,
     localAiEligibilityReason: null,
   });
@@ -79,4 +87,31 @@ test("external AI falls back to lightweight and preserves the external failure r
       modelId: null,
     });
   }
+});
+
+test("requested processing modes follow the explicit external-to-local-to-lightweight order", () => {
+  const cases = [
+    ["lightweight", {}, { requestedMode: "lightweight", effectiveMode: "lightweight", fallbackReason: null, provider: null, modelId: null }],
+    ["local-ai", { localAiAvailable: true }, { requestedMode: "local-ai", effectiveMode: "local-ai", fallbackReason: null, provider: null, modelId: null }],
+    ["local-ai", {}, { requestedMode: "local-ai", effectiveMode: "lightweight", fallbackReason: "semantic_model_unavailable", provider: null, modelId: null }],
+    ["external-ai", { externalAiAvailable: true, externalProvider: "gemini", externalModelId: "gemini-2.5-flash" }, { requestedMode: "external-ai", effectiveMode: "external-ai", fallbackReason: null, provider: "gemini", modelId: "gemini-2.5-flash" }],
+    ["external-ai", { localAiAvailable: true, externalFailureReason: "external_ai_timeout" }, { requestedMode: "external-ai", effectiveMode: "local-ai", fallbackReason: "external_ai_timeout", provider: null, modelId: null }],
+    ["external-ai", { externalFailureReason: "external_ai_invalid_response" }, { requestedMode: "external-ai", effectiveMode: "lightweight", fallbackReason: "external_ai_invalid_response", provider: null, modelId: null }],
+  ];
+  for (const [requestedMode, context, expected] of cases) assert.deepEqual(resolveRequestedProcessingMode(requestedMode, context), expected);
+});
+
+test("external default reports readiness separately and auto remains local-only", () => {
+  const external = { configured: true, modelSelected: true, connectionStatus: "ready", provider: "gemini", modelId: "gemini-test", available: true };
+  assert.deepEqual(resolveProcessingDefault({ defaultProcessingMode: "external-ai" }, completeRuntime, external), {
+    defaultMode: "external-ai",
+    effectiveDefaultMode: "external-ai",
+    localAiAvailable: true,
+    externalAiEnabled: true,
+    externalAiReady: true,
+    fallbackReason: null,
+    localAiEligible: true,
+    localAiEligibilityReason: null,
+  });
+  assert.equal(resolveProcessingDefault({ defaultProcessingMode: "auto" }, completeRuntime, external).effectiveDefaultMode, "local-ai");
 });
