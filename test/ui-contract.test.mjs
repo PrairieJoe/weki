@@ -337,16 +337,17 @@ test("Weki source release metadata targets v1.3.0", () => {
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
   assert.match(buildInfo, /Application version:\s*1\.3\.0/);
-  assert.match(buildInfo, /Application source commit:\s*e7bd050a2ef78a1f21447cdd78623be0d1d057ec/);
+  const sourceCommit = buildInfo.match(/^Application source commit:\s*([a-f0-9]{40})$/m)?.[1];
+  assert.ok(sourceCommit, "build metadata should identify its full application source commit");
   assert.match(latestYml, /version:\s*1\.3\.0/);
-  assert.match(latestYml, /source commit:\s*e7bd050a2ef78a1f21447cdd78623be0d1d057ec/);
+  assert.match(latestYml, new RegExp(`source commit:\\s*${sourceCommit}`));
   assert.match(sha256, /Weki-1\.3\.0-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
   assert.match(releaseNotesV123, /1\.2\.3/);
   assert.match(releaseNotesV130, /LibreOffice/);
-  assert.match(releaseNotesGenerated, /Source commit: `e7bd050a2ef78a1f21447cdd78623be0d1d057ec`/);
+  assert.ok(releaseNotesGenerated.includes(`Source commit: \`${sourceCommit}\``));
 });
 
 test("Weki exposes the nine-step onboarding targets in order", () => {
