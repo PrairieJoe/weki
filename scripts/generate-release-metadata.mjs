@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { metadataTextMatches } from "./release-metadata-utils.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -133,7 +134,7 @@ const expectedFiles = new Map([
 if (checkOnly) {
   for (const [filePath, expected] of expectedFiles) {
     const actual = await fs.readFile(filePath, "utf8").catch(() => null);
-    if (actual !== expected) throw new Error(`${path.relative(root, filePath)} is not reproducible for source commit ${sourceCommit}; run the generator without --check to regenerate it.`);
+    if (!metadataTextMatches(actual, expected)) throw new Error(`${path.relative(root, filePath)} is not reproducible for source commit ${sourceCommit}; run the generator without --check to regenerate it.`);
   }
 } else {
   for (const [filePath, contents] of expectedFiles) await fs.writeFile(filePath, contents, "utf8");
