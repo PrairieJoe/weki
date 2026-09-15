@@ -34,7 +34,7 @@ export function normalizeSynonymEntry(input = {}, { id = input.id || null } = {}
   };
 }
 
-export function expandSynonymQuery(query, entries = []) {
+export function expandSynonymQuery(query, entries = [], { maxExpansions = 8 } = {}) {
   const normalizedQuery = normalize(query);
   const expansions = [];
   const expandedQueries = [];
@@ -48,11 +48,17 @@ export function expandSynonymQuery(query, entries = []) {
     const aliases = normalizedValues(entry.aliases);
     if (!term) continue;
     if (containsTerm(normalizedQuery, term)) {
-      for (const alias of aliases) if (!containsTerm(normalizedQuery, alias) && alias !== term) { expansions.push(alias); expandedQueries.push(replaceTerm(normalizedQuery, term, alias)); }
+      for (const alias of aliases) {
+        if (expansions.length >= Math.max(0, Number(maxExpansions) || 0)) break;
+        if (!containsTerm(normalizedQuery, alias) && alias !== term) { expansions.push(alias); expandedQueries.push(replaceTerm(normalizedQuery, term, alias)); }
+      }
     }
-    for (const alias of aliases) if (containsTerm(normalizedQuery, alias) && !containsTerm(normalizedQuery, term)) { expansions.push(term); expandedQueries.push(replaceTerm(normalizedQuery, alias, term)); }
+    for (const alias of aliases) {
+      if (expansions.length >= Math.max(0, Number(maxExpansions) || 0)) break;
+      if (containsTerm(normalizedQuery, alias) && !containsTerm(normalizedQuery, term)) { expansions.push(term); expandedQueries.push(replaceTerm(normalizedQuery, alias, term)); }
+    }
   }
-  const unique = [...new Set(expansions)];
+  const unique = [...new Set(expansions)].slice(0, Math.max(0, Number(maxExpansions) || 0));
   return { query: [normalizedQuery, ...unique].filter(Boolean).join(" "), normalized: normalizedQuery, expansions: unique, queries: [...new Set(expandedQueries)].filter(Boolean) };
 }
 

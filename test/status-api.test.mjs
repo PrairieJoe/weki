@@ -138,6 +138,44 @@ test("GET /api/status reports storage and maintenance state", async (t) => {
   assert.equal(status.storage.total - status.storage.available, status.storage.usage);
 });
 
+test("bundled MYBOX runtime catalog keeps the HWP renderer installable before download", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-catalog-test-"));
+  const server = startServer(dataDir, { NAVER_MBOX_TOKEN: "" });
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  await waitForStatusReady(server.output, server.port);
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`);
+  const runtime = await response.json();
+  const renderer = runtime.components["document-renderer"];
+  assert.equal(response.status, 200);
+  assert.equal(renderer.installable, true);
+  assert.equal(renderer.availableVersion, "0.8.4");
+  assert.equal(renderer.sourceType, "mybox");
+  assert.equal(renderer.requiresMybox, true);
+});
+
+test("truncated knowledge-base.json is preserved and recovered without blocking startup", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-storage-recovery-test-"));
+  await fs.writeFile(path.join(dataDir, "knowledge-base.json"), "{\"documents\":[", "utf8");
+  const server = startServer(dataDir);
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  const response = await waitForStatusReady(server.output, server.port);
+  const status = await response.json();
+  const documents = await (await fetch(`http://127.0.0.1:${server.port}/api/documents`)).json();
+  const artifacts = await fs.readdir(dataDir);
+  assert.equal(status.databaseRecovery.status, "recovered-empty");
+  assert.equal(documents.documents.length, 0);
+  assert.ok(artifacts.some((entry) => entry.startsWith("knowledge-base.json.corrupt-")));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dataDir, "knowledge-base.json"), "utf8")).documents, []);
+});
+
 test("retired POST /api/backups route is absent", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-backups-route-test-"));
   const server = startServer(dataDir);
@@ -212,6 +250,33 @@ test("MYBOX status separates token authentication failure from missing credentia
   assert.equal(status.message, "MYBOX 토큰 검증에 실패했습니다. 관리자에게 문의하세요.");
 });
 
+test("MYBOX status identifies storage connectivity separately from runtime deployment", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-mybox-storage-status-test-"));
+  const provider = createServer((req, res) => {
+    if (req.url?.startsWith("/v1/drive/storage")) {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ used: 1, quota: 2 }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  const apiBase = `http://127.0.0.1:${provider.address().port}/v1`;
+  const server = startServer(dataDir, { NAVER_MBOX_TOKEN: "test-token", WEKI_MYBOX_API_BASE: apiBase, WEKI_MYBOX_CREDENTIAL_STATE: "available" });
+  t.after(async () => {
+    await stopServer(server);
+    await Promise.all([fs.rm(dataDir, { recursive: true, force: true }), new Promise((resolve) => provider.close(resolve))]);
+  });
+
+  await waitForStatusReady(server.output, server.port);
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/mybox/status`);
+  const status = await response.json();
+  assert.equal(status.connected, true);
+  assert.equal(status.connectionScope, "storage");
+  assert.equal(status.message, "저장공간 API 연결됨");
+});
+
 test("failed registration remains visible without creating a document", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-registration-test-"));
   const server = startServer(dataDir);
@@ -265,6 +330,28 @@ test("relinking the same Hash keeps one physical original and the document filen
   assert.deepEqual(await fs.readFile(path.join(dataDir, "originals", hash, "기존이름.pdf")), bytes);
   await assert.rejects(fs.access(path.join(dataDir, "originals", hash, "새이름.pdf")));
   assert.deepEqual((await fs.readdir(path.join(dataDir, "originals", hash))).sort(), ["기존이름.pdf"]);
+});
+
+test("legacy stores without document units remain readable after an upgrade", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-legacy-store-upgrade-test-"));
+  await fs.writeFile(path.join(dataDir, "knowledge-base.json"), JSON.stringify({
+    documents: [{ id: "legacy-document", name: "기존문서.pdf", format: "PDF", processingStatus: "completed" }],
+    jobs: [], synonyms: [], feedback: [], audit: [],
+  }));
+  const server = startServer(dataDir);
+  t.after(async () => {
+    await stopServer(server);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  await waitForStatusReady(server.output, server.port);
+  const documentsResponse = await fetch(`http://127.0.0.1:${server.port}/api/documents`);
+  const statusResponse = await fetch(`http://127.0.0.1:${server.port}/api/status`);
+  assert.equal(documentsResponse.status, 200);
+  assert.equal(statusResponse.status, 200);
+  assert.equal((await documentsResponse.json()).documents[0].name, "기존문서.pdf");
+  assert.equal((await statusResponse.json()).indexedUnits, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dataDir, "knowledge-base.json"), "utf8")).documents[0].units, []);
 });
 
 test("storage migration accepts an existing empty destination folder", async (t) => {

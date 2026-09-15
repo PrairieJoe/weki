@@ -3,6 +3,7 @@ const componentLabels = {
   "semantic-model": "의미 검색 모델",
   "semantic-reranker": "검색 결과 재정렬 모델",
   "document-renderer": "문서 화면 처리기",
+  "presentation-renderer": "Office 문서·PPT 렌더러",
 };
 
 export function runtimeAction(entry, metadata) {
@@ -25,9 +26,19 @@ export function shouldAutoRestart(batch, jobs = []) {
     && !jobs.some((job) => activeJobStatuses.has(job?.status));
 }
 
+export function runtimeBatchProgress(batch) {
+  if (batch?.status !== "indexing" || typeof batch.currentComponent !== "string" || !batch.currentComponent) return null;
+  const total = Number(batch.total);
+  if (!Number.isFinite(total) || total < 1) return null;
+  const completed = Number(batch.completed);
+  const currentStep = Math.min(total, Math.max(0, Number.isFinite(completed) ? completed : 0) + 1);
+  return { componentId: batch.currentComponent, currentStep, total };
+}
+
 export function runtimeBatchMessage(batch) {
   if (batch?.status === "ready") return "모든 검색 구성요소 설치가 완료되었습니다.";
   const unavailable = batch?.unavailable || [];
+  const unavailableDetails = new Map((batch?.unavailableDetails || []).map((entry) => [entry?.id, entry?.error]).filter(([id]) => id));
   const skipped = batch?.skipped || [];
   const failed = batch?.failed || [];
   const failedDetails = failed.map((entry) => {
@@ -43,7 +54,8 @@ export function runtimeBatchMessage(batch) {
   }
   const unavailableLabels = unavailable.map((id) => componentLabels[id] || id);
   if (batch?.status === "partial" && unavailableLabels.length) {
-    return `설치 가능한 구성요소 설치가 완료되었습니다. ${unavailableLabels.join(", ")}는 MYBOX 배포본이 없어 보류되었습니다.`;
+    const details = unavailable.map((id) => unavailableDetails.get(id)).filter(Boolean);
+    return `설치 가능한 구성요소 설치가 완료되었습니다. ${unavailableLabels.join(", ")}는 MYBOX 배포본을 확인하지 못해 보류되었습니다.${details.length ? ` (${details.join("; ")})` : ""}`;
   }
   const skippedLabels = skipped.map((id) => componentLabels[id] || id);
   if (skippedLabels.length) return `${skippedLabels.join(", ")}는 배포본이 없어 설치하지 못했습니다.`;

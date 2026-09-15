@@ -1,5 +1,19 @@
 # Weki 변경 이력
 
+## v1.3.0 - 문서 처리 품질 개선 반영 범위
+
+자세한 구현·검증 범위는 [v1.3.0 릴리스 노트](./RELEASE_NOTES_V1.3.0.md)를 참조하세요. 현재 패키지와 사용자 테스트 설치파일은 v1.3.0입니다.
+
+### Office/HWP 호환성 및 검색 근거
+
+- `@rhwp/core`는 HWP/HWPX 전용 renderer로 복원하고, LibreOffice Portable은 DOCX/PPTX용 managed runtime dependency로 병렬 추가했습니다.
+- PPTX는 native XML 표·차트·내장 workbook 추출을 유지하면서 LibreOffice 실제 슬라이드 렌더링 결과를 OCR해 이미지에만 있는 글자도 검색합니다.
+- DOCX도 LibreOffice 실제 페이지 렌더링 OCR을 사용하며, runtime 미설치·실패 시 native parser와 내장 이미지 OCR fallback을 유지합니다.
+- Online 설치는 MYBOX `wiki/runtime/v1/` payload를 내려받아 SHA-256 검증 후 사용자 데이터의 managed dependency로 설치하고, Full Offline 패키지는 동일 번들을 선택적으로 포함할 수 있습니다. LibreOffice 공개 URL fallback은 사용하지 않습니다.
+- LibreOffice Portable payload와 runtime manifest를 MYBOX `wiki/runtime/v1/presentation-renderer/26.2.4/`에 게시할 수 있으며, `source: "mybox"` 설치는 스트리밍 다운로드·SHA-256 검증·Portable 추출까지 MYBOX 경로를 사용합니다.
+- rhwp `document-renderer@0.8.4` payload를 MYBOX `wiki/runtime/v1/document-renderer/0.8.4/`에 게시하고, HWP/HWPX renderer도 같은 manifest·SHA-256 검증·재시작 적용 흐름으로 설치할 수 있습니다.
+- MYBOX runtime manifest 확인에는 bounded timeout을 적용하고, renderer 설치 실패를 UI에 반환해 전체 설치가 무한 대기하지 않도록 했습니다. 성공한 runtime 적용 재시작은 graceful relaunch/quit으로 처리합니다.
+
 ## v1.2.3 - 2026-09-11
 
 자세한 내용은 [v1.2.3 릴리스 노트](./RELEASE_NOTES_V1.2.3.md)를 참조하세요.

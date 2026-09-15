@@ -151,5 +151,7 @@ export function buildPageMetrics(pages, units) {
   const pageCount = sourcePages.length;
   const searchablePageCount = searchablePages.size;
   const failedPageCount = Math.max(0, pageCount - searchablePageCount);
-  return { pageCount, searchablePageCount, indexedUnitCount: indexedUnits.length, failedPageCount, processingStatus: failedPageCount ? "partial" : "completed", visualEvidenceCount: indexedUnits.filter((unit) => unit.evidenceType === "visual").length, ocrPageCount: sourcePages.filter((page) => page.ocrText || (page.visualAssets || []).some((asset) => asset.ocrText || asset.text)).length };
+  const diagnosticUnitCount = indexedUnits.filter((unit) => Array.isArray(unit.diagnostics) && unit.diagnostics.length).length;
+  const metrics = { pageCount, searchablePageCount, indexedUnitCount: indexedUnits.length, failedPageCount, processingStatus: failedPageCount || diagnosticUnitCount ? "partial" : "completed", visualEvidenceCount: indexedUnits.filter((unit) => unit.evidenceType === "visual").length, ocrPageCount: sourcePages.filter((page) => page.ocrText || (page.visualAssets || []).some((asset) => asset.ocrText || asset.text)).length };
+  return diagnosticUnitCount ? { ...metrics, diagnosticUnitCount } : metrics;
 }

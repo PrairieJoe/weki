@@ -15,9 +15,24 @@
 
 Var WekiDataDir
 
+; electron-builder's default process check can miss the packaged server child
+; when PowerShell process inspection is unavailable or access is restricted.
+; Stop the Weki process tree before the standard installer file-lock check so
+; upgrades do not leave the user at the generic "Weki cannot be closed" retry
+; dialog. The command is scoped to Weki.exe and is a no-op when it is absent.
+!macro customCheckAppRunning
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /T /IM "${APP_EXECUTABLE_FILENAME}"'
+  Pop $0
+  Sleep 750
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /T /IM "${APP_EXECUTABLE_FILENAME}"'
+  Pop $0
+  Sleep 750
+!macroend
+
 !ifndef BUILD_UNINSTALLER
 !include FileFunc.nsh
 !include StrContains.nsh
+!define WEKI_TEMP_MARGIN_KB 32768
 Var WekiInstallDirInput
 Var WekiInstallDirBrowse
 Var WekiInstallSpaceRequired
@@ -26,6 +41,12 @@ Var WekiDataDirInput
 Var WekiDataDirBrowse
 Var WekiMyboxToken
 Var WekiMyboxTokenInput
+Var WekiMyboxTokenStatus
+
+!macro customInit
+  Call WekiCheckTempSpace
+!macroend
+
 !macro customPageAfterChangeDir
   Page custom WekiInstallDirPageCreate WekiInstallDirPageLeave
   Page custom WekiDataPageCreate WekiDataPageLeave
@@ -58,6 +79,30 @@ Function WekiInstallDirPageCreate
   Pop $WekiInstallSpaceAvailable
   Call WekiUpdateInstallSpace
   nsDialogs::Show
+FunctionEnd
+
+Function WekiCheckTempSpace
+  ; NSIS stores the embedded app archive in $PLUGINSDIR under $TEMP before
+  ; extracting it to $INSTDIR. Check the TEMP drive before that write begins.
+  FileOpen $0 "$EXEFILE" r
+  ${If} $0 == ""
+    Return
+  ${EndIf}
+  FileSeek $0 0 END $1
+  FileClose $0
+  IntOp $1 $1 + 1023
+  IntOp $1 $1 / 1024
+  IntOp $1 $1 + ${WEKI_TEMP_MARGIN_KB}
+
+  ${GetRoot} "$TEMP" $2
+  ${DriveSpace} "$2" "/D=F /S=K" $3
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  ${If} $3 < $1
+    MessageBox MB_ICONSTOP|MB_TOPMOST "설치를 진행할 수 없습니다.$\r$\n$\r$\nWeki는 설치 전에 시스템 임시 폴더에 압축파일을 준비합니다. 현재 C: 시스템 임시공간이 부족합니다.$\r$\n$\r$\nC: 드라이브의 여유공간을 확보하거나 Windows의 TEMP/TMP 위치를 여유 있는 드라이브로 변경한 뒤 다시 실행해 주세요.$\r$\n$\r$\n설치 대상 폴더가 다른 드라이브에 있어도 이 임시공간이 필요합니다."
+    Abort
+  ${EndIf}
 FunctionEnd
 
 Function WekiFormatMegabytes
@@ -185,7 +230,11 @@ Function WekiMyboxTokenPageCreate
 
   ${NSD_CreateLabel} 0 0 310u 20u "MYBOX 토큰(선택)"
   Pop $0
-  ${NSD_CreateLabel} 0 24u 310u 42u "설치 PC의 선택된 Weki 데이터 저장소에$\r$\nWindows 보안 저장소로 암호화해 보관합니다."
+  StrCpy $WekiMyboxTokenStatus "설치 PC의 선택된 Weki 데이터 저장소에$\r$\nWindows 보안 저장소로 암호화해 보관합니다."
+  IfFileExists "$WekiDataDir\credentials\mybox-token.json" 0 weki_mybox_token_status_ready
+  StrCpy $WekiMyboxTokenStatus "기존 암호화 MYBOX 토큰을 유지합니다.$\r$\n변경하려는 경우에만 새 토큰을 입력하세요."
+  weki_mybox_token_status_ready:
+  ${NSD_CreateLabel} 0 24u 310u 42u "$WekiMyboxTokenStatus"
   Pop $0
   !insertmacro MUI_HEADER_TEXT "MYBOX 토큰" "MYBOX 연결에 사용할 토큰을 입력해 주세요."
   ${NSD_CreateGroupBox} ${WEKI_FORM_GROUP_X} ${WEKI_FORM_GROUP_Y} ${WEKI_FORM_GROUP_W} ${WEKI_FORM_GROUP_H} "MYBOX 토큰"
@@ -197,9 +246,9 @@ FunctionEnd
 
 Function WekiMyboxTokenPageLeave
   ${NSD_GetText} $WekiMyboxTokenInput $WekiMyboxToken
-  Delete "$WekiDataDir\credentials\.mybox-token.bootstrap"
   ${If} $WekiMyboxToken != ""
     CreateDirectory "$WekiDataDir\credentials"
+    Delete "$WekiDataDir\credentials\.mybox-token.bootstrap"
     FileOpen $0 "$WekiDataDir\credentials\.mybox-token.bootstrap" w
     FileWrite $0 "$WekiMyboxToken"
     FileClose $0
@@ -220,22 +269,71 @@ FunctionEnd
 !ifdef BUILD_UNINSTALLER
 Var WekiRootIndex
 Var WekiRootCount
+
+Function un.WekiRemoveInstallFilesKeepData
+  FindFirst $0 $1 "$INSTDIR\*.*"
+  weki_remove_install_entry:
+    StrCmp $1 "" weki_remove_install_done
+    StrCmp $1 "." weki_remove_install_next
+    StrCmp $1 ".." weki_remove_install_next
+    StrCmp $1 "data" weki_remove_install_next
+    IfFileExists "$INSTDIR\$1\*.*" 0 weki_remove_install_file
+      RMDir /r "$INSTDIR\$1"
+      Goto weki_remove_install_next
+    weki_remove_install_file:
+      Delete "$INSTDIR\$1"
+    weki_remove_install_next:
+      FindNext $0 $1
+      Goto weki_remove_install_entry
+  weki_remove_install_done:
+  FindClose $0
+FunctionEnd
+
+; During an update, keep the in-place data directory while replacing the app
+; files. External data roots are kept by leaving customUnInstall untouched in
+; that path. A real uninstall still removes the complete installation folder.
+!macro customRemoveFiles
+  ${If} ${isUpdated}
+    Call un.WekiRemoveInstallFilesKeepData
+  ${Else}
+    SetOutPath $TEMP
+    RMDir /r "$INSTDIR"
+  ${EndIf}
+!macroend
+
 !macro customUnInstall
   ; Stop Weki and its server child before deleting files that may still be locked.
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /T /IM "${APP_EXECUTABLE_FILENAME}"'
   Pop $0
   Sleep 500
-  ReadRegStr $WekiRootCount HKCU "Software\Weki" "ManagedRootCount"
-  ${If} $WekiRootCount == ""
-    StrCpy $WekiRootCount "0"
-  ${EndIf}
-  StrCpy $WekiRootIndex "1"
-  weki_remove_managed_root:
-    ${If} $WekiRootIndex > $WekiRootCount
-      Goto weki_remove_legacy
+  ${IfNot} ${isUpdated}
+    ReadRegStr $WekiRootCount HKCU "Software\Weki" "ManagedRootCount"
+    ${If} $WekiRootCount == ""
+      StrCpy $WekiRootCount "0"
     ${EndIf}
-    ReadRegStr $WekiDataDir HKCU "Software\Weki" "ManagedRoot$WekiRootIndex"
-    IfFileExists "$WekiDataDir\.weki-storage-root" 0 weki_next_managed_root
+    StrCpy $WekiRootIndex "1"
+    weki_remove_managed_root:
+      ${If} $WekiRootIndex > $WekiRootCount
+        Goto weki_remove_legacy
+      ${EndIf}
+      ReadRegStr $WekiDataDir HKCU "Software\Weki" "ManagedRoot$WekiRootIndex"
+      IfFileExists "$WekiDataDir\.weki-storage-root" 0 weki_next_managed_root
+        RMDir /r "$WekiDataDir\originals"
+        RMDir /r "$WekiDataDir\incoming"
+        RMDir /r "$WekiDataDir\backups"
+        RMDir /r "$WekiDataDir\tessdata"
+        RMDir /r "$WekiDataDir\credentials"
+        RMDir /r "$WekiDataDir\.runtime"
+        Delete "$WekiDataDir\knowledge-base.json"
+        Delete "$WekiDataDir\storage-location.json"
+        Delete "$WekiDataDir\.weki-storage-root"
+        RMDir "$WekiDataDir"
+      weki_next_managed_root:
+      IntOp $WekiRootIndex $WekiRootIndex + 1
+      Goto weki_remove_managed_root
+    weki_remove_legacy:
+    ReadRegStr $WekiDataDir HKCU "Software\Weki" "DataDir"
+    IfFileExists "$WekiDataDir\.weki-storage-root" 0 weki_remove_legacy_done
       RMDir /r "$WekiDataDir\originals"
       RMDir /r "$WekiDataDir\incoming"
       RMDir /r "$WekiDataDir\backups"
@@ -246,40 +344,25 @@ Var WekiRootCount
       Delete "$WekiDataDir\storage-location.json"
       Delete "$WekiDataDir\.weki-storage-root"
       RMDir "$WekiDataDir"
-    weki_next_managed_root:
-    IntOp $WekiRootIndex $WekiRootIndex + 1
-    Goto weki_remove_managed_root
-  weki_remove_legacy:
-  ReadRegStr $WekiDataDir HKCU "Software\Weki" "DataDir"
-  IfFileExists "$WekiDataDir\.weki-storage-root" 0 weki_remove_legacy_done
-    RMDir /r "$WekiDataDir\originals"
-    RMDir /r "$WekiDataDir\incoming"
-    RMDir /r "$WekiDataDir\backups"
-    RMDir /r "$WekiDataDir\tessdata"
-    RMDir /r "$WekiDataDir\credentials"
-    RMDir /r "$WekiDataDir\.runtime"
-    Delete "$WekiDataDir\knowledge-base.json"
-    Delete "$WekiDataDir\storage-location.json"
-    Delete "$WekiDataDir\.weki-storage-root"
-    RMDir "$WekiDataDir"
-  weki_remove_legacy_done:
-  IfFileExists "$INSTDIR\data\.weki-storage-root" 0 weki_remove_install_data_done
-    RMDir /r "$INSTDIR\data\originals"
-    RMDir /r "$INSTDIR\data\incoming"
-    RMDir /r "$INSTDIR\data\backups"
-    RMDir /r "$INSTDIR\data\tessdata"
-    RMDir /r "$INSTDIR\data\credentials"
-    RMDir /r "$INSTDIR\data\.runtime"
-    Delete "$INSTDIR\data\knowledge-base.json"
-    Delete "$INSTDIR\data\storage-location.json"
-    Delete "$INSTDIR\data\.weki-storage-root"
-    RMDir "$INSTDIR\data"
-  weki_remove_install_data_done:
-  RMDir /r "$LOCALAPPDATA\Weki"
-  RMDir /r "$LOCALAPPDATA\Weki-runtime-cache"
-  RMDir /r "$APPDATA\Weki"
-  RMDir /r "$TEMP\Weki-electron"
-  RMDir /r "$TEMP\Weki-runtime-cache"
-  DeleteRegKey HKCU "Software\Weki"
+    weki_remove_legacy_done:
+    IfFileExists "$INSTDIR\data\.weki-storage-root" 0 weki_remove_install_data_done
+      RMDir /r "$INSTDIR\data\originals"
+      RMDir /r "$INSTDIR\data\incoming"
+      RMDir /r "$INSTDIR\data\backups"
+      RMDir /r "$INSTDIR\data\tessdata"
+      RMDir /r "$INSTDIR\data\credentials"
+      RMDir /r "$INSTDIR\data\.runtime"
+      Delete "$INSTDIR\data\knowledge-base.json"
+      Delete "$INSTDIR\data\storage-location.json"
+      Delete "$INSTDIR\data\.weki-storage-root"
+      RMDir "$INSTDIR\data"
+    weki_remove_install_data_done:
+    RMDir /r "$LOCALAPPDATA\Weki"
+    RMDir /r "$LOCALAPPDATA\Weki-runtime-cache"
+    RMDir /r "$APPDATA\Weki"
+    RMDir /r "$TEMP\Weki-electron"
+    RMDir /r "$TEMP\Weki-runtime-cache"
+    DeleteRegKey HKCU "Software\Weki"
+  ${EndIf}
 !macroend
 !endif

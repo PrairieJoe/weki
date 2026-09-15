@@ -2,6 +2,8 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron')
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
+const { requestWithTimeout } = require('./src/runtime/http-readiness.cjs');
 
 const registryKey = 'HKCU\\Software\\Weki';
 const installDataDir = app.isPackaged ? path.join(path.dirname(process.execPath), 'data') : path.join(__dirname, '.weki-data');
@@ -21,6 +23,8 @@ const writeRegistryValue = (name, type, value) => {
 };
 const readStoragePointer = () => registryValue('DataDir');
 const pendingCleanupRoot = app.isPackaged ? registryValue('PendingCleanupRoot') : null;
+const runtimeAutoRelaunchArgument = '--weki-runtime-auto-relaunch';
+const isRuntimeAutoRelaunch = process.argv.includes(runtimeAutoRelaunchArgument);
 const deleteRegistryValue = (name) => {
   if (process.platform !== 'win32') return false;
   try { return spawnSync('reg.exe', ['delete', registryKey, '/v', name, '/f'], { windowsHide: true, encoding: 'utf8' }).status === 0; } catch { return false; }
@@ -59,8 +63,10 @@ app.commandLine.appendSwitch('in-process-gpu');
 
 let server;
 let ownsServer = false;
-const appPort = Number(process.env.WEKI_PORT || 5173);
-const appUrl = `http://127.0.0.1:${appPort}`;
+let quitAfterServerStop = false;
+let runtimeInstallWatch = null;
+let appPort = Number(process.env.WEKI_PORT || 5173);
+let appUrl = `http://127.0.0.1:${appPort}`;
 const packagedIconPath = path.join(__dirname, 'dist', 'app-icon.png');
 const myboxCredentialState = { state: 'missing', token: null };
 let activeDataDir = null;
@@ -93,13 +99,32 @@ const sendStoredGeminiKeyToServer = async () => {
     catch { finish(false); }
   });
 };
-const serverIsReady = async () => { try { return (await fetch(`${appUrl}/api/status`)).ok; } catch { return false; } };
-const waitForServer = async () => {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try { const response = await fetch(`${appUrl}/api/status`); if (response.ok) return; } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 150));
+const serverIsReady = async ({ dataDir = null, credentialState = null } = {}) => {
+  try {
+    const { response, data: status } = await requestWithTimeout(`${appUrl}/api/status`, { timeoutMs: 2_000, parseJson: true });
+    if (!response.ok) return false;
+    if (dataDir && path.resolve(status.dataDirectory || '').toLowerCase() !== path.resolve(dataDir).toLowerCase()) return false;
+    if (credentialState) {
+      const { response: credentialResponse, data: credential } = await requestWithTimeout(`${appUrl}/api/mybox/status`, { timeoutMs: 2_000, parseJson: true });
+      if (!credentialResponse.ok) return false;
+      if (credential.credentialState !== credentialState) return false;
+    }
+    return true;
+  } catch { return false; }
+};
+const isPortAvailable = (port) => new Promise((resolve) => {
+  const probe = net.createServer();
+  const finish = (available) => { try { probe.close(); } catch {} resolve(available); };
+  probe.once('error', () => finish(false));
+  probe.once('listening', () => finish(true));
+  probe.listen(port, '127.0.0.1');
+});
+const findAvailablePort = async (startPort) => {
+  for (let offset = 0; offset < 20; offset += 1) {
+    const candidate = startPort + offset;
+    if (await isPortAvailable(candidate)) return candidate;
   }
-  throw new Error('Weki local server did not start');
+  throw new Error('Weki local server port is unavailable');
 };
 const canWrite = (targetDir) => {
   const probe = path.join(targetDir, `.weki-write-test-${process.pid}-${Date.now()}`);
@@ -131,6 +156,22 @@ const configureRuntimeStorage = (dataDir) => {
   app.commandLine.appendSwitch('disk-cache-dir', path.join(runtimeDir, 'cache'));
   if (path.resolve(runtimeDir).toLowerCase() !== path.resolve(provisionalRuntimeDir).toLowerCase()) fs.rmSync(provisionalRuntimeDir, { recursive: true, force: true });
 };
+const writeRuntimeRestartLog = (event) => {
+  try {
+    const logDir = path.join(activeRuntimeDir, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'runtime-restart.log'), `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, 'utf8');
+  } catch { /* Restart diagnostics must never prevent the app from starting or quitting. */ }
+};
+let appStartupPhase = 'waiting-for-electron-ready';
+const traceStartupPhase = (phase, details = {}) => {
+  appStartupPhase = phase;
+  if (isRuntimeAutoRelaunch && activeDataDir) writeRuntimeRestartLog({ type: 'startup-phase', phase, ...details });
+};
+const relaunchArguments = (extra = []) => [
+  ...process.argv.slice(1).filter((argument) => argument !== runtimeAutoRelaunchArgument),
+  ...extra,
+];
 const cleanupManagedStorageRoot = (rootDir, currentDir) => {
   if (!rootDir || !path.isAbsolute(rootDir) || path.resolve(rootDir).toLowerCase() === path.resolve(currentDir).toLowerCase()) return false;
   try {
@@ -161,7 +202,7 @@ const chooseFreshDataDir = async () => {
   return chooseAlternativeDataDir(installDataDir);
 };
 const loadMyboxCredential = async (dataDir) => {
-  const { consumeTokenBootstrap, loadEncryptedToken } = await import('./src/server/mybox-credentials.mjs');
+  const { consumeTokenBootstrap, loadEncryptedTokenWithFallback } = await import('./src/server/mybox-credentials.mjs');
   const encryptToken = async (token) => {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows 보안 저장소를 사용할 수 없습니다.');
     return safeStorage.encryptString(token).toString('base64');
@@ -171,9 +212,8 @@ const loadMyboxCredential = async (dataDir) => {
     return safeStorage.decryptString(Buffer.from(ciphertext, 'base64'));
   };
   const bootstrap = await consumeTokenBootstrap(dataDir, encryptToken);
-  const stored = await loadEncryptedToken(dataDir, decryptToken);
   if (bootstrap.state === 'failed') return { state: 'unreadable', token: null };
-  return stored;
+  return loadEncryptedTokenWithFallback(dataDir, [initialPointerDataDir, ...readManagedRoots()], decryptToken);
 };
 const restartOwnedServer = async () => {
   if (!ownsServer || !activeServerEnv) return false;
@@ -188,7 +228,8 @@ const restartOwnedServer = async () => {
     });
   }
   server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
-  await waitForServer();
+  const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
+  await waitForLocalServerReady(server);
   await sendStoredGeminiKeyToServer();
   return true;
 };
@@ -209,6 +250,32 @@ const reloadOwnedServer = async () => {
   await waitForLocalServerReady(server);
   await sendStoredGeminiKeyToServer();
   return true;
+};
+const stopOwnedServer = () => {
+  if (!ownsServer || !server) return Promise.resolve();
+  const child = server;
+  server = null;
+  ownsServer = false;
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener('exit', finish);
+      resolve();
+    };
+    child.once('exit', finish);
+    try { child.kill(); } catch {}
+    timer = setTimeout(() => {
+      try {
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      } catch {}
+      finish();
+    }, 1500);
+  });
 };
 const getAiCredentialHandlers = async () => {
   const { createAiCredentialIpcHandlers } = await import('./src/server/ai-credentials.mjs');
@@ -244,54 +311,145 @@ ipcMain.handle('weki:gemini-credential-status', async () => (await getAiCredenti
 ipcMain.handle('weki:save-gemini-key', async (_event, apiKey) => (await getAiCredentialHandlers()).save(apiKey));
 ipcMain.handle('weki:clear-gemini-key', async () => (await getAiCredentialHandlers()).clear());
 ipcMain.handle('weki:restart', () => {
-  app.relaunch();
-  app.exit(0);
+  app.relaunch({ args: relaunchArguments() });
+  app.quit();
   return { ok: true };
 });
+ipcMain.handle('weki:watch-runtime-install', async (_event, startedAt) => {
+  if (typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return { ok: false, reason: 'invalid-batch-start-time' };
+  if (!activeDataDir || !appUrl) return { ok: false, reason: 'app-not-ready' };
+  if (runtimeInstallWatch?.startedAt === startedAt) return { ok: true, alreadyWatching: true };
+
+  runtimeInstallWatch?.controller.abort();
+  const controller = new AbortController();
+  const watch = { startedAt, controller, promise: null, relaunchRequested: false };
+  runtimeInstallWatch = watch;
+  writeRuntimeRestartLog({ type: 'watch-armed', batchStartedAt: startedAt });
+  try {
+    const { monitorRuntimeInstallAutoRestart } = await import('./src/runtime/auto-restart.mjs');
+    watch.promise = monitorRuntimeInstallAutoRestart({
+      startedAt,
+      signal: controller.signal,
+      getSnapshot: async () => {
+        const [runtimeResponse, jobsResponse] = await Promise.all([
+          fetch(`${appUrl}/api/runtime/components`),
+          fetch(`${appUrl}/api/jobs`),
+        ]);
+        if (!runtimeResponse.ok || !jobsResponse.ok) throw new Error(`status-http-${runtimeResponse.status}-${jobsResponse.status}`);
+        const [runtime, jobs] = await Promise.all([runtimeResponse.json(), jobsResponse.json()]);
+        return { installBatch: runtime.installBatch, jobs: jobs.jobs };
+      },
+      onEvent: writeRuntimeRestartLog,
+      requestRestart: async () => {
+        watch.relaunchRequested = true;
+        app.relaunch({ args: relaunchArguments([runtimeAutoRelaunchArgument]) });
+        app.quit();
+      },
+    });
+    void watch.promise
+      .then((result) => writeRuntimeRestartLog({ type: 'watch-finished', batchStartedAt: startedAt, ...result }))
+      .catch((error) => writeRuntimeRestartLog({ type: 'watch-error', batchStartedAt: startedAt, message: String(error?.message || error) }))
+      .finally(() => { if (runtimeInstallWatch === watch) runtimeInstallWatch = null; });
+    return { ok: true };
+  } catch (error) {
+    controller.abort();
+    if (runtimeInstallWatch === watch) runtimeInstallWatch = null;
+    writeRuntimeRestartLog({ type: 'watch-start-failed', batchStartedAt: startedAt, message: String(error?.message || error) });
+    return { ok: false, reason: 'watcher-start-failed' };
+  }
+});
 app.whenReady().then(async () => {
-  if (grantStorageTarget) { app.exit(grantStorageAccess(grantStorageTarget) ? 0 : 1); return; }
-  const storage = await import('./src/server/storage.mjs');
-  const pointerDataDir = initialPointerDataDir;
-  let electronDataDir = process.env.WEKI_DATA_DIR || (app.isPackaged ? storage.selectInitialDataDirectory({ pointerDataDir, installDataDir }) : path.join(__dirname, '.weki-data'));
-  if (app.isPackaged && !process.env.WEKI_DATA_DIR && pointerDataDir) {
-    const pendingDataDir = readPendingStorage(pointerDataDir);
-    if (pendingDataDir && path.resolve(pendingDataDir).toLowerCase() !== path.resolve(pointerDataDir).toLowerCase()) {
-      electronDataDir = pendingDataDir;
-      if (!canWrite(electronDataDir)) electronDataDir = await chooseAlternativeDataDir(pendingDataDir);
-      if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '기존 저장소를 사용할 수 없습니다. 저장 위치를 다시 선택해 주세요.' }); app.quit(); return; }
-      if (!writeStoragePointer(electronDataDir)) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '저장 위치 설정을 저장하지 못했습니다.' }); app.quit(); return; }
-    } else if (!canWrite(pointerDataDir)) {
-      electronDataDir = await chooseAlternativeDataDir(pointerDataDir);
-      if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '기존 저장소에 쓸 수 없습니다. 저장 위치를 다시 선택해 주세요.' }); app.quit(); return; }
+  try {
+    if (grantStorageTarget) { app.exit(grantStorageAccess(grantStorageTarget) ? 0 : 1); return; }
+    traceStartupPhase('resolve-data-directory');
+    const storage = await import('./src/server/storage.mjs');
+    const pointerDataDir = initialPointerDataDir;
+    let electronDataDir = process.env.WEKI_DATA_DIR || (app.isPackaged ? storage.selectInitialDataDirectory({ pointerDataDir, installDataDir }) : path.join(__dirname, '.weki-data'));
+    if (app.isPackaged && !process.env.WEKI_DATA_DIR && pointerDataDir) {
+      const pendingDataDir = readPendingStorage(pointerDataDir);
+      if (pendingDataDir && path.resolve(pendingDataDir).toLowerCase() !== path.resolve(pointerDataDir).toLowerCase()) {
+        electronDataDir = pendingDataDir;
+        if (!canWrite(electronDataDir)) electronDataDir = await chooseAlternativeDataDir(pendingDataDir);
+        if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '기존 저장소를 사용할 수 없습니다. 저장 위치를 다시 선택해 주세요.' }); app.quit(); return; }
+        if (!writeStoragePointer(electronDataDir)) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '저장 위치 설정을 저장하지 못했습니다.' }); app.quit(); return; }
+      } else if (!canWrite(pointerDataDir)) {
+        electronDataDir = await chooseAlternativeDataDir(pointerDataDir);
+        if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '기존 저장소에 쓸 수 없습니다. 저장 위치를 다시 선택해 주세요.' }); app.quit(); return; }
+        if (!writeStoragePointer(electronDataDir)) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '저장 위치 설정을 저장하지 못했습니다.' }); app.quit(); return; }
+      }
+    }
+    if (app.isPackaged && !process.env.WEKI_DATA_DIR && !pointerDataDir) {
+      traceStartupPhase('choose-data-directory');
+      electronDataDir = await chooseFreshDataDir();
+      if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '문서 저장 위치가 선택되지 않았습니다.' }); app.quit(); return; }
       if (!writeStoragePointer(electronDataDir)) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '저장 위치 설정을 저장하지 못했습니다.' }); app.quit(); return; }
     }
+    activeDataDir = electronDataDir;
+    configureRuntimeStorage(electronDataDir);
+    if (isRuntimeAutoRelaunch) writeRuntimeRestartLog({ type: 'auto-restart-process-started', pid: process.pid });
+    traceStartupPhase('load-mybox-credential');
+    const credential = await loadMyboxCredential(electronDataDir).catch(() => ({ state: 'unreadable', token: null }));
+    myboxCredentialState.state = credential.state;
+    myboxCredentialState.token = credential.token || null;
+    traceStartupPhase('cleanup-pending-storage');
+    if (app.isPackaged && pendingCleanupRoot && cleanupManagedStorageRoot(pendingCleanupRoot, electronDataDir)) deleteRegistryValue('PendingCleanupRoot');
+    if (app.isPackaged && !process.env.WEKI_DATA_DIR) rememberStorageRoot(electronDataDir);
+    traceStartupPhase('check-existing-server');
+    const matchingServerReady = myboxCredentialState.state === 'available'
+      ? await serverIsReady({ dataDir: electronDataDir, credentialState: 'available' })
+      : false;
+    if (!matchingServerReady) {
+      traceStartupPhase('find-server-port');
+      appPort = await findAvailablePort(appPort);
+      appUrl = `http://127.0.0.1:${appPort}`;
+      activeServerEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WEKI_DESKTOP: '1', WEKI_DISABLE_ENV_FILE: app.isPackaged ? '1' : '0', WEKI_SEARCH_V2: process.env.WEKI_SEARCH_V2 || (app.isPackaged ? '1' : '0'), WEKI_DATA_DIR: electronDataDir, WEKI_CONFIG_PATH: path.join(electronDataDir, 'storage-location.json'), WEKI_MYBOX_CREDENTIAL_STATE: myboxCredentialState.state, WEKI_PORT: String(appPort) };
+      delete activeServerEnv.WEKI_ENV_FILE;
+      if (myboxCredentialState.token) activeServerEnv.NAVER_MBOX_TOKEN = myboxCredentialState.token;
+      else delete activeServerEnv.NAVER_MBOX_TOKEN;
+      if (!app.isPackaged) activeServerEnv.WEKI_ENV_FILE = path.join(__dirname, '.env');
+      traceStartupPhase('spawn-local-server', { port: appPort });
+      server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }); ownsServer = true;
+      const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
+      traceStartupPhase('wait-local-server-ready', { pid: server.pid, port: appPort });
+      await waitForLocalServerReady(server);
+      traceStartupPhase('local-server-ready', { port: appPort });
+    } else {
+      traceStartupPhase('reuse-existing-server');
+    }
+    if (ownsServer) {
+      traceStartupPhase('apply-gemini-credential');
+      await sendStoredGeminiKeyToServer();
+    }
+    traceStartupPhase('create-window');
+    const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 1024, minHeight: 700, title: 'Weki', icon: fs.existsSync(packagedIconPath) ? packagedIconPath : undefined, webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'src', 'preload.cjs') } });
+    window.webContents.once('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+      if (isRuntimeAutoRelaunch && isMainFrame) writeRuntimeRestartLog({ type: 'window-load-failed', errorCode, errorDescription });
+    });
+    traceStartupPhase('load-window');
+    await window.loadURL(`${appUrl}/`);
+    traceStartupPhase('window-loaded');
+  } catch (error) {
+    const message = String(error?.message || error);
+    writeRuntimeRestartLog({ type: 'startup-failed', phase: appStartupPhase, message });
+    try {
+      await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: `Weki 시작 중 문제가 발생했습니다.\n단계: ${appStartupPhase}\n${message}` });
+    } catch {}
+    app.quit();
   }
-  if (app.isPackaged && !process.env.WEKI_DATA_DIR && !pointerDataDir) {
-    electronDataDir = await chooseFreshDataDir();
-    if (!electronDataDir) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '문서 저장 위치가 선택되지 않았습니다.' }); app.quit(); return; }
-    if (!writeStoragePointer(electronDataDir)) { await dialog.showMessageBox({ type: 'error', title: 'Weki를 시작할 수 없습니다', message: '저장 위치 설정을 저장하지 못했습니다.' }); app.quit(); return; }
-  }
-  activeDataDir = electronDataDir;
-  configureRuntimeStorage(electronDataDir);
-  const credential = await loadMyboxCredential(electronDataDir).catch(() => ({ state: 'unreadable', token: null }));
-  myboxCredentialState.state = credential.state;
-  myboxCredentialState.token = credential.token || null;
-  if (app.isPackaged && pendingCleanupRoot && cleanupManagedStorageRoot(pendingCleanupRoot, electronDataDir)) deleteRegistryValue('PendingCleanupRoot');
-  if (app.isPackaged && !process.env.WEKI_DATA_DIR) rememberStorageRoot(electronDataDir);
-  if (!(await serverIsReady())) {
-    activeServerEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WEKI_DESKTOP: '1', WEKI_DISABLE_ENV_FILE: app.isPackaged ? '1' : '0', WEKI_SEARCH_V2: process.env.WEKI_SEARCH_V2 || (app.isPackaged ? '1' : '0'), WEKI_DATA_DIR: electronDataDir, WEKI_CONFIG_PATH: path.join(electronDataDir, 'storage-location.json'), WEKI_MYBOX_CREDENTIAL_STATE: myboxCredentialState.state, WEKI_PORT: String(appPort) };
-    delete activeServerEnv.WEKI_ENV_FILE;
-    if (myboxCredentialState.token) activeServerEnv.NAVER_MBOX_TOKEN = myboxCredentialState.token;
-    else delete activeServerEnv.NAVER_MBOX_TOKEN;
-    if (!app.isPackaged) activeServerEnv.WEKI_ENV_FILE = path.join(__dirname, '.env');
-    server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }); ownsServer = true;
-  }
-  await waitForServer();
-  if (ownsServer) await sendStoredGeminiKeyToServer();
-  const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 1024, minHeight: 700, title: 'Weki', icon: fs.existsSync(packagedIconPath) ? packagedIconPath : undefined, webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'src', 'preload.cjs') } });
-  await window.loadURL(`${appUrl}/`);
 });
 app.on('window-all-closed', () => app.quit());
+app.on('before-quit', (event) => {
+  if (runtimeInstallWatch) {
+    const watch = runtimeInstallWatch;
+    watch.controller.abort();
+    if (!watch.relaunchRequested) writeRuntimeRestartLog({ type: 'watch-cancelled', batchStartedAt: watch.startedAt });
+    runtimeInstallWatch = null;
+  }
+  if (quitAfterServerStop || !ownsServer || !server) return;
+  event.preventDefault();
+  quitAfterServerStop = true;
+  stopOwnedServer().finally(() => app.quit());
+});
 app.on('will-quit', () => {
   if (ownsServer && server && !server.killed) server.kill();
   if (path.resolve(activeRuntimeDir).toLowerCase() !== path.resolve(provisionalRuntimeDir).toLowerCase()) fs.rmSync(provisionalRuntimeDir, { recursive: true, force: true });

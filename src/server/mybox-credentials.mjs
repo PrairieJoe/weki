@@ -50,6 +50,24 @@ export async function loadEncryptedToken(dataDir, decryptToken) {
   }
 }
 
+export async function loadEncryptedTokenWithFallback(dataDir, fallbackDataDirs, decryptToken) {
+  const current = await loadEncryptedToken(dataDir, decryptToken);
+  if (current.state !== "missing") return current;
+  const currentPath = path.resolve(dataDir).toLowerCase();
+  const candidates = [...new Set((fallbackDataDirs || []).filter((candidate) => typeof candidate === "string" && candidate.trim()).map((candidate) => path.resolve(candidate)))]
+    .filter((candidate) => candidate.toLowerCase() !== currentPath);
+  for (const candidate of candidates) {
+    const stored = await loadEncryptedToken(candidate, decryptToken);
+    if (stored.state !== "available") continue;
+    const source = credentialPath(candidate);
+    const destination = credentialPath(dataDir);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.copyFile(source, destination);
+    return stored;
+  }
+  return current;
+}
+
 export async function consumeTokenBootstrap(dataDir, encryptToken) {
   const source = bootstrapPath(dataDir);
   if (!(await exists(source))) return { state: "missing" };

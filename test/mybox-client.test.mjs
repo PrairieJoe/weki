@@ -52,3 +52,50 @@ test("MYBOX client creates folders, lists children, and overwrites a named file 
   assert.equal(JSON.parse(calls[3].options.body).parentId, "weki-id");
   assert.equal(JSON.parse(calls[3].options.body).isOverwrite, true);
 });
+
+test("MYBOX client times out a stalled request and aborts the fetch", async () => {
+  let aborted = false;
+  const fetchImpl = async (_url, { signal }) => new Promise((_, reject) => {
+    signal.addEventListener("abort", () => {
+      aborted = true;
+      reject(new DOMException("aborted", "AbortError"));
+    }, { once: true });
+  });
+  const client = createMyboxClient({ token: "test-token", fetchImpl, timeoutMs: 5 });
+
+  await assert.rejects(() => client.listResources(), /MYBOX 파일 목록 조회 시간 초과 \(1초\)/);
+  assert.equal(aborted, true);
+});
+
+test("MYBOX client preserves the operation when a network request fails", async () => {
+  const client = createMyboxClient({
+    token: "test-token",
+    fetchImpl: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }); },
+  });
+
+  await assert.rejects(() => client.downloadFile("file-id"), /MYBOX 다운로드 URL 발급 실패: fetch failed \(ECONNRESET\)/);
+});
+
+test("MYBOX download timeout remains active until the response body finishes", async () => {
+  let downloadAborted = false;
+  const fetchImpl = async (url, { signal }) => {
+    if (url.endsWith("/download")) return new Response(JSON.stringify({ downloadUrl: "https://storage.example/payload" }));
+    return new Response(new ReadableStream({
+      start(controller) {
+        signal.addEventListener("abort", () => {
+          downloadAborted = true;
+          controller.error(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      },
+    }));
+  };
+  const client = createMyboxClient({ token: "test-token", fetchImpl, downloadTimeoutMs: 10 });
+  const response = await client.downloadFile("file-id");
+
+  const bodyRead = response.text();
+  await assert.rejects(
+    Promise.race([bodyRead, new Promise((_, reject) => setTimeout(() => reject(new Error("response body did not time out")), 50))]),
+    /MYBOX 파일 다운로드 시간 초과 \(1초\)/,
+  );
+  assert.equal(downloadAborted, true);
+});
