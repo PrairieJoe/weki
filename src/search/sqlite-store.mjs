@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 let BetterSqlite3 = null;
 try { BetterSqlite3 = require("better-sqlite3"); } catch { /* Node's built-in sqlite remains the development fallback. */ }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function clean(value) {
   return value === undefined || value === null ? "" : String(value);
@@ -29,6 +29,52 @@ function generatedMetadataJson(value) {
 function parseGeneratedMetadata(value) {
   if (!value) return null;
   try { return JSON.parse(value); } catch { return null; }
+}
+
+function parseJson(value, fallback = null) {
+  if (!value) return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function vectorBlob(vector = []) {
+  const values = Array.isArray(vector) || ArrayBuffer.isView(vector) ? Array.from(vector) : [];
+  return Buffer.from(Float32Array.from(values).buffer);
+}
+
+function vectorFromBlob(blob) {
+  if (!blob) return null;
+  try {
+    const bytes = Buffer.from(blob);
+    if (bytes.byteLength % 4 !== 0) return null;
+    return Array.from(new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4));
+  } catch {
+    return null;
+  }
+}
+
+function structuredSearchFields(unit = {}) {
+  const structured = unit.structured && typeof unit.structured === "object" ? unit.structured : {};
+  const table = unit.table || structured.table || null;
+  const chart = unit.chart || structured.chart || (unit.type === "chart" ? structured : null);
+  const tableCells = Array.isArray(table?.cells)
+    ? table.cells.map((cell) => cell?.value).filter((value) => value !== undefined && value !== null && String(value).trim())
+    : Array.isArray(table?.rows) ? table.rows.flatMap((row) => (Array.isArray(row) ? row : [row])).filter((value) => value !== undefined && value !== null && String(value).trim()) : [];
+  const series = Array.isArray(chart?.series) ? chart.series : [];
+  return {
+    textSource: clean(unit.textSource || unit.origin || ""),
+    confidence: Number.isFinite(Number(unit.confidence)) ? Math.max(0, Math.min(1, Number(unit.confidence))) : null,
+    caption: clean(unit.caption),
+    chartTitle: clean(chart?.title),
+    chartSeries: series.flatMap((item) => [item?.name, ...(item?.values || [])]).filter((value) => value !== undefined && value !== null && String(value).trim()).join(" "),
+    chartCategory: [ ...(chart?.categories || []), ...series.flatMap((item) => item?.categories || []) ].filter((value) => value !== undefined && value !== null && String(value).trim()).join(" "),
+    chartValue: series.flatMap((item) => item?.values || []).filter((value) => value !== undefined && value !== null && String(value).trim()).join(" "),
+    tableCell: tableCells.filter(Boolean).join(" "),
+  };
+}
+
+function evidenceMetadataJson(fragment = {}) {
+  if (!(fragment.metadata || fragment.structured || fragment.diagnostics || fragment.sourceRef || fragment.caption)) return null;
+  return JSON.stringify({ structured: fragment.structured || null, diagnostics: fragment.diagnostics || [], sourceRef: fragment.sourceRef || null, caption: fragment.caption || "" });
 }
 
 export function ftsLiteral(query) {
@@ -67,7 +113,9 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       type TEXT NOT NULL,
       origin TEXT,
       asset_name TEXT,
-      context TEXT NOT NULL DEFAULT ''
+      context TEXT NOT NULL DEFAULT '',
+      confidence REAL,
+      metadata_json TEXT
     );
     CREATE TABLE IF NOT EXISTS knowledge_units (
       id TEXT PRIMARY KEY,
@@ -79,7 +127,15 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       ocr_text TEXT NOT NULL DEFAULT '',
       generated_metadata TEXT,
       search_auxiliary_text TEXT NOT NULL DEFAULT '',
-      source_range TEXT NOT NULL DEFAULT ''
+      source_range TEXT NOT NULL DEFAULT '',
+      text_source TEXT,
+      confidence REAL,
+      caption TEXT NOT NULL DEFAULT '',
+      chart_title TEXT NOT NULL DEFAULT '',
+      chart_series TEXT NOT NULL DEFAULT '',
+      chart_category TEXT NOT NULL DEFAULT '',
+      chart_value TEXT NOT NULL DEFAULT '',
+      table_cell TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS unit_evidence_refs (
       unit_id TEXT NOT NULL REFERENCES knowledge_units(id) ON DELETE CASCADE,
@@ -90,6 +146,7 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       unit_id TEXT PRIMARY KEY REFERENCES knowledge_units(id) ON DELETE CASCADE,
       dimension INTEGER NOT NULL,
       vector_json TEXT NOT NULL,
+      vector_blob BLOB,
       model TEXT,
       generation TEXT
     );
@@ -135,6 +192,12 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       native_text,
       ocr_text,
       search_auxiliary_text,
+      caption,
+      chart_title,
+      chart_series,
+      chart_category,
+      chart_value,
+      table_cell,
       tokenize='unicode61 remove_diacritics 2'
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_trigram USING fts5(
@@ -147,18 +210,31 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
   try { db.exec("ALTER TABLE documents ADD COLUMN accessed_at TEXT"); } catch { /* Existing v2 stores already have the column. */ }
   try { db.exec("ALTER TABLE documents ADD COLUMN source_status TEXT NOT NULL DEFAULT 'unavailable'"); } catch { /* Existing v2 stores already have the column. */ }
   try { db.exec("ALTER TABLE documents ADD COLUMN cloud_original_file TEXT"); } catch { /* Existing v2 stores already have the column. */ }
+  try { db.exec("ALTER TABLE evidence_fragments ADD COLUMN confidence REAL"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE evidence_fragments ADD COLUMN metadata_json TEXT"); } catch { /* Existing stores already have the column. */ }
   try { db.exec("ALTER TABLE knowledge_units ADD COLUMN generated_metadata TEXT"); } catch { /* Existing v2 stores already have the column. */ }
   try { db.exec("ALTER TABLE knowledge_units ADD COLUMN search_auxiliary_text TEXT NOT NULL DEFAULT ''"); } catch { /* Existing v2 stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN text_source TEXT"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN confidence REAL"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN caption TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN chart_title TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN chart_series TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN chart_category TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN chart_value TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE knowledge_units ADD COLUMN table_cell TEXT NOT NULL DEFAULT ''"); } catch { /* Existing stores already have the column. */ }
+  try { db.exec("ALTER TABLE embeddings ADD COLUMN vector_blob BLOB"); } catch { /* Existing stores already have the column. */ }
   const ftsColumns = db.prepare("PRAGMA table_info(knowledge_fts)").all().map((column) => column.name);
-  if (!ftsColumns.includes("search_auxiliary_text")) {
+  const requiredFtsColumns = ["search_auxiliary_text", "caption", "chart_title", "chart_series", "chart_category", "chart_value", "table_cell"];
+  if (requiredFtsColumns.some((column) => !ftsColumns.includes(column))) {
     db.exec(`DROP TABLE knowledge_fts; CREATE VIRTUAL TABLE knowledge_fts USING fts5(
       unit_id UNINDEXED, document_id UNINDEXED, title, heading, text, native_text, ocr_text,
-      search_auxiliary_text, tokenize='unicode61 remove_diacritics 2'
+      search_auxiliary_text, caption, chart_title, chart_series, chart_category, chart_value, table_cell,
+      tokenize='unicode61 remove_diacritics 2'
     );`);
-    const migrateFts = db.prepare(`INSERT INTO knowledge_fts(unit_id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const unit of db.prepare("SELECT id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text FROM knowledge_units").all()) {
-      migrateFts.run(unit.id, unit.document_id, indexableText(unit.title), indexableText(unit.heading), indexableText(unit.text), indexableText(unit.native_text), indexableText(unit.ocr_text), indexableText(unit.search_auxiliary_text));
+    const migrateFts = db.prepare(`INSERT INTO knowledge_fts(unit_id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text, caption, chart_title, chart_series, chart_category, chart_value, table_cell)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const unit of db.prepare("SELECT id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text, caption, chart_title, chart_series, chart_category, chart_value, table_cell FROM knowledge_units").all()) {
+      migrateFts.run(unit.id, unit.document_id, indexableText(unit.title), indexableText(unit.heading), indexableText(unit.text), indexableText(unit.native_text), indexableText(unit.ocr_text), indexableText(unit.search_auxiliary_text), indexableText(unit.caption), indexableText(unit.chart_title), indexableText(unit.chart_series), indexableText(unit.chart_category), indexableText(unit.chart_value), indexableText(unit.table_cell));
     }
   }
 
@@ -168,44 +244,49 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, format=excluded.format,
       created_at=excluded.created_at, modified_at=excluded.modified_at, accessed_at=excluded.accessed_at, source_hash=excluded.source_hash,
       source_status=excluded.source_status, cloud_original_file=excluded.cloud_original_file`),
-    evidence: db.prepare(`INSERT INTO evidence_fragments(id, document_id, page_start, page_end, type, origin, asset_name, context)
-      VALUES(@id, @documentId, @pageStart, @pageEnd, @type, @origin, @assetName, @context)
+    evidence: db.prepare(`INSERT INTO evidence_fragments(id, document_id, page_start, page_end, type, origin, asset_name, context, confidence, metadata_json)
+      VALUES(@id, @documentId, @pageStart, @pageEnd, @type, @origin, @assetName, @context, @confidence, @metadataJson)
       ON CONFLICT(id) DO UPDATE SET page_start=excluded.page_start, page_end=excluded.page_end,
-      type=excluded.type, origin=excluded.origin, asset_name=excluded.asset_name, context=excluded.context`),
-    unit: db.prepare(`INSERT INTO knowledge_units(id, document_id, title, heading, text, native_text, ocr_text, generated_metadata, search_auxiliary_text, source_range)
-      VALUES(@id, @documentId, @title, @heading, @text, @nativeText, @ocrText, @generatedMetadata, @searchAuxiliaryText, @sourceRange)
+      type=excluded.type, origin=excluded.origin, asset_name=excluded.asset_name, context=excluded.context, confidence=excluded.confidence, metadata_json=excluded.metadata_json`),
+    unit: db.prepare(`INSERT INTO knowledge_units(id, document_id, title, heading, text, native_text, ocr_text, generated_metadata, search_auxiliary_text, source_range, text_source, confidence, caption, chart_title, chart_series, chart_category, chart_value, table_cell)
+      VALUES(@id, @documentId, @title, @heading, @text, @nativeText, @ocrText, @generatedMetadata, @searchAuxiliaryText, @sourceRange, @textSource, @confidence, @caption, @chartTitle, @chartSeries, @chartCategory, @chartValue, @tableCell)
       ON CONFLICT(id) DO UPDATE SET document_id=excluded.document_id, title=excluded.title,
       heading=excluded.heading, text=excluded.text, native_text=excluded.native_text,
       ocr_text=excluded.ocr_text, generated_metadata=excluded.generated_metadata,
-      search_auxiliary_text=excluded.search_auxiliary_text, source_range=excluded.source_range`),
+      search_auxiliary_text=excluded.search_auxiliary_text, source_range=excluded.source_range, text_source=excluded.text_source,
+      confidence=excluded.confidence, caption=excluded.caption, chart_title=excluded.chart_title, chart_series=excluded.chart_series,
+      chart_category=excluded.chart_category, chart_value=excluded.chart_value, table_cell=excluded.table_cell`),
     deleteFts: db.prepare("DELETE FROM knowledge_fts WHERE unit_id = ?"),
-    insertFts: db.prepare(`INSERT INTO knowledge_fts(unit_id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?)`),
+    insertFts: db.prepare(`INSERT INTO knowledge_fts(unit_id, document_id, title, heading, text, native_text, ocr_text, search_auxiliary_text, caption, chart_title, chart_series, chart_category, chart_value, table_cell)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     deleteTrigram: db.prepare("DELETE FROM knowledge_trigram WHERE unit_id = ?"),
     insertTrigram: db.prepare("INSERT INTO knowledge_trigram(unit_id, text) VALUES(?, ?)"),
     unlinkEvidence: db.prepare("DELETE FROM unit_evidence_refs WHERE unit_id = ?"),
     linkEvidence: db.prepare("INSERT OR IGNORE INTO unit_evidence_refs(unit_id, evidence_id) VALUES(?, ?)"),
-    embedding: db.prepare(`INSERT INTO embeddings(unit_id, dimension, vector_json, model, generation) VALUES(?, ?, ?, ?, ?)
-      ON CONFLICT(unit_id) DO UPDATE SET dimension=excluded.dimension, vector_json=excluded.vector_json, model=excluded.model, generation=excluded.generation`),
+    embedding: db.prepare(`INSERT INTO embeddings(unit_id, dimension, vector_json, vector_blob, model, generation) VALUES(?, ?, ?, ?, ?, ?)
+      ON CONFLICT(unit_id) DO UPDATE SET dimension=excluded.dimension, vector_json=excluded.vector_json, vector_blob=excluded.vector_blob, model=excluded.model, generation=excluded.generation`),
     search: db.prepare(`SELECT f.unit_id AS unitId, f.document_id AS documentId, d.format,
       d.created_at AS createdAt, d.modified_at AS modifiedAt, d.accessed_at AS accessedAt,
       f.title, f.heading, f.text, f.native_text AS nativeText, f.ocr_text AS ocrText,
-      f.search_auxiliary_text AS searchAuxiliaryText,
-      bm25(knowledge_fts, 0.0, 0.0, 8.0, 5.0, 3.0, 2.0, 1.5, 1.0) AS bm25
+      f.search_auxiliary_text AS searchAuxiliaryText, f.caption, f.chart_title AS chartTitle, f.chart_series AS chartSeries,
+      f.chart_category AS chartCategory, f.chart_value AS chartValue, f.table_cell AS tableCell,
+      bm25(knowledge_fts, 0.0, 0.0, 8.0, 5.0, 3.0, 2.0, 1.5, 1.0, 3.0, 4.0, 3.0, 3.0, 3.0, 3.0) AS bm25
       FROM knowledge_fts f JOIN documents d ON d.id = f.document_id
       WHERE knowledge_fts MATCH @query ORDER BY bm25 LIMIT @limit`),
     trigramSearch: db.prepare(`SELECT t.unit_id AS unitId, u.document_id AS documentId, d.format,
       d.created_at AS createdAt, d.modified_at AS modifiedAt, d.accessed_at AS accessedAt,
       u.title, u.heading, u.text, u.native_text AS nativeText, u.ocr_text AS ocrText,
-      u.search_auxiliary_text AS searchAuxiliaryText, 0.0 AS bm25
+      u.search_auxiliary_text AS searchAuxiliaryText, u.caption, u.chart_title AS chartTitle, u.chart_series AS chartSeries,
+      u.chart_category AS chartCategory, u.chart_value AS chartValue, u.table_cell AS tableCell, 0.0 AS bm25
       FROM knowledge_trigram t JOIN knowledge_units u ON u.id = t.unit_id JOIN documents d ON d.id = u.document_id
       WHERE knowledge_trigram MATCH @query LIMIT @limit`),
     hydrate: db.prepare(`SELECT u.id AS unitId, u.document_id AS documentId, d.name AS documentName, d.format,
       d.source_status AS sourceStatus, d.cloud_original_file AS cloudOriginalFile,
       u.title, u.heading, u.text, u.native_text AS nativeText, u.ocr_text AS ocrText,
-      u.generated_metadata AS generatedMetadataJson, u.search_auxiliary_text AS searchAuxiliaryText,
+      u.generated_metadata AS generatedMetadataJson, u.search_auxiliary_text AS searchAuxiliaryText, u.text_source AS textSource, u.confidence,
+      u.caption, u.chart_title AS chartTitle, u.chart_series AS chartSeries, u.chart_category AS chartCategory, u.chart_value AS chartValue, u.table_cell AS tableCell,
       u.source_range AS sourceRange, e.id AS evidenceId, e.page_start AS pageStart,
-      e.page_end AS pageEnd, e.type, e.origin, e.asset_name AS assetName, e.context
+      e.page_end AS pageEnd, e.type, e.origin, e.asset_name AS assetName, e.context, e.confidence AS evidenceConfidence, e.metadata_json AS evidenceMetadataJson
       FROM knowledge_units u JOIN documents d ON d.id = u.document_id
       LEFT JOIN unit_evidence_refs r ON r.unit_id = u.id
       LEFT JOIN evidence_fragments e ON e.id = r.evidence_id
@@ -245,19 +326,23 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
   function upsertEvidenceFragment(fragment) {
     statements.evidence.run({ id: clean(fragment.id), documentId: clean(fragment.documentId), pageStart: Number(fragment.pageStart) || 1,
       pageEnd: Number(fragment.pageEnd) || Number(fragment.pageStart) || 1, type: clean(fragment.type) || "text", origin: fragment.origin ?? null,
-      assetName: fragment.assetName ?? null, context: clean(fragment.context) });
+      assetName: fragment.assetName ?? null, context: clean(fragment.context),
+      confidence: Number.isFinite(Number(fragment.confidence)) ? Math.max(0, Math.min(1, Number(fragment.confidence))) : null,
+      metadataJson: evidenceMetadataJson(fragment) });
   }
 
   function upsertKnowledgeUnit(unit) {
     const text = clean(unit.text);
+    const fields = structuredSearchFields(unit);
     transaction(() => {
       statements.unit.run({ id: clean(unit.id), documentId: clean(unit.documentId), title: clean(unit.title), heading: clean(unit.heading),
         text, nativeText: clean(unit.nativeText), ocrText: clean(unit.ocrText), generatedMetadata: generatedMetadataJson(unit.generatedMetadata),
-        searchAuxiliaryText: clean(unit.searchAuxiliaryText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}) });
+        searchAuxiliaryText: clean(unit.searchAuxiliaryText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}), ...fields });
       statements.deleteFts.run(clean(unit.id));
-      statements.insertFts.run(clean(unit.id), clean(unit.documentId), indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText), indexableText(unit.searchAuxiliaryText));
+      statements.insertFts.run(clean(unit.id), clean(unit.documentId), indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText), indexableText(unit.searchAuxiliaryText),
+        indexableText(fields.caption), indexableText(fields.chartTitle), indexableText(fields.chartSeries), indexableText(fields.chartCategory), indexableText(fields.chartValue), indexableText(fields.tableCell));
       statements.deleteTrigram.run(clean(unit.id));
-      statements.insertTrigram.run(clean(unit.id), indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)} ${clean(unit.searchAuxiliaryText)}`));
+      statements.insertTrigram.run(clean(unit.id), indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)} ${clean(unit.searchAuxiliaryText)} ${fields.caption} ${fields.chartTitle} ${fields.chartSeries} ${fields.chartCategory} ${fields.chartValue} ${fields.tableCell}`));
       statements.unlinkEvidence.run(clean(unit.id));
       for (const evidenceId of unit.evidenceIds || []) statements.linkEvidence.run(clean(unit.id), clean(evidenceId));
     });
@@ -302,8 +387,9 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     const criterion = filters?.dateCriterion === "created" ? "createdAt" : filters?.dateCriterion === "accessed" ? "accessedAt" : "modifiedAt";
     if (filters?.from) rows = rows.filter((row) => row[criterion] && String(row[criterion]) >= filters.from);
     if (filters?.to) rows = rows.filter((row) => row[criterion] && String(row[criterion]).slice(0, 10) <= filters.to);
-    rows = rows.filter((row) => matchesRouteConstraints(normalizedQuery, [row.title, row.heading, row.text, row.nativeText, row.ocrText, row.searchAuxiliaryText]));
-    rows = rows.filter((row) => hasRequiredSearchTerms(normalizedQuery, [row.title, row.heading, row.text, row.nativeText, row.ocrText, row.searchAuxiliaryText]));
+    const searchValues = (row) => [row.title, row.heading, row.text, row.nativeText, row.ocrText, row.searchAuxiliaryText, row.caption, row.chartTitle, row.chartSeries, row.chartCategory, row.chartValue, row.tableCell];
+    rows = rows.filter((row) => matchesRouteConstraints(normalizedQuery, searchValues(row)));
+    rows = rows.filter((row) => hasRequiredSearchTerms(normalizedQuery, searchValues(row)));
     return rows.map((row, index) => ({ ...row, engine: "fts", score: 1 / (index + 1) }));
   }
 
@@ -317,17 +403,25 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
       if (!grouped.has(row.unitId)) grouped.set(row.unitId, { unitId: row.unitId, documentId: row.documentId, documentName: row.documentName,
         format: row.format, sourceStatus: row.sourceStatus || "unavailable", cloudOriginalFile: row.cloudOriginalFile || null, title: row.title,
         heading: [row.heading, row.searchAuxiliaryText].filter(Boolean).join(" "), text: row.text, nativeText: row.nativeText, ocrText: row.ocrText,
-        generatedMetadata: parseGeneratedMetadata(row.generatedMetadataJson), searchAuxiliaryText: row.searchAuxiliaryText, sourceRange: row.sourceRange, evidence: [] });
-      if (row.evidenceId) grouped.get(row.unitId).evidence.push({ id: row.evidenceId, pageStart: row.pageStart, pageEnd: row.pageEnd,
-        type: row.type, origin: row.origin, assetName: row.assetName, context: row.context });
+        generatedMetadata: parseGeneratedMetadata(row.generatedMetadataJson), searchAuxiliaryText: row.searchAuxiliaryText, sourceRange: row.sourceRange,
+        textSource: row.textSource || "native", confidence: row.confidence, caption: row.caption,
+        structured: { chart: row.chartTitle || row.chartSeries || row.chartCategory || row.chartValue ? {
+          title: row.chartTitle, series: row.chartSeries ? [{ name: row.chartSeries, values: row.chartValue ? row.chartValue.split(/\s+/u).filter(Boolean) : [] }] : [],
+          categories: row.chartCategory ? row.chartCategory.split(/\s+/u).filter(Boolean) : [],
+        } : null, table: row.tableCell ? { cells: row.tableCell.split(/\s+/u).filter(Boolean).map((value) => ({ value })) } : null }, evidence: [] });
+      if (row.evidenceId) {
+        const evidence = { id: row.evidenceId, pageStart: row.pageStart, pageEnd: row.pageEnd,
+          type: row.type, origin: row.origin, assetName: row.assetName, context: row.context, ...parseJson(row.evidenceMetadataJson, {}) };
+        if (row.evidenceConfidence !== null && row.evidenceConfidence !== undefined) evidence.confidence = row.evidenceConfidence;
+        grouped.get(row.unitId).evidence.push(evidence);
+      }
     }
     return ids.map((id) => grouped.get(id)).filter(Boolean);
   }
 
   function upsertEmbedding(embedding) {
-    db.prepare(`INSERT INTO embeddings(unit_id, dimension, vector_json, model, generation) VALUES(?, ?, ?, ?, ?)
-      ON CONFLICT(unit_id) DO UPDATE SET dimension=excluded.dimension, vector_json=excluded.vector_json, model=excluded.model, generation=excluded.generation`)
-      .run(clean(embedding.unitId), Number(embedding.dimension || embedding.vector?.length || 0), JSON.stringify(embedding.vector || []), embedding.model ?? null, embedding.generation ?? null);
+    const vector = Array.isArray(embedding.vector) || ArrayBuffer.isView(embedding.vector) ? Array.from(embedding.vector) : [];
+    statements.embedding.run(clean(embedding.unitId), Number(embedding.dimension || vector.length || 0), JSON.stringify(vector), vectorBlob(vector), embedding.model ?? null, embedding.generation ?? null);
   }
 
   function deleteDocument(documentId) {
@@ -352,33 +446,51 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
         const fragment = entry.evidence || {};
         statements.evidence.run({ id: clean(fragment.id), documentId, pageStart: Number(fragment.pageStart) || 1,
           pageEnd: Number(fragment.pageEnd) || Number(fragment.pageStart) || 1, type: clean(fragment.type) || "text", origin: fragment.origin ?? null,
-          assetName: fragment.assetName ?? null, context: clean(fragment.context) });
+          assetName: fragment.assetName ?? null, context: clean(fragment.context),
+          confidence: Number.isFinite(Number(fragment.confidence)) ? Math.max(0, Math.min(1, Number(fragment.confidence))) : null,
+          metadataJson: evidenceMetadataJson(fragment) });
         const unit = entry.unit || {};
         const unitId = clean(unit.id);
         const text = clean(unit.text);
+        const fields = structuredSearchFields(unit);
         statements.unit.run({ id: unitId, documentId, title: clean(unit.title), heading: clean(unit.heading), text,
           nativeText: clean(unit.nativeText), ocrText: clean(unit.ocrText), generatedMetadata: generatedMetadataJson(unit.generatedMetadata),
-          searchAuxiliaryText: clean(unit.searchAuxiliaryText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}) });
+          searchAuxiliaryText: clean(unit.searchAuxiliaryText), sourceRange: typeof unit.sourceRange === "string" ? unit.sourceRange : JSON.stringify(unit.sourceRange ?? {}), ...fields });
         statements.deleteFts.run(unitId);
-        statements.insertFts.run(unitId, documentId, indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText), indexableText(unit.searchAuxiliaryText));
+        statements.insertFts.run(unitId, documentId, indexableText(unit.title), indexableText(unit.heading), indexableText(text), indexableText(unit.nativeText), indexableText(unit.ocrText), indexableText(unit.searchAuxiliaryText),
+          indexableText(fields.caption), indexableText(fields.chartTitle), indexableText(fields.chartSeries), indexableText(fields.chartCategory), indexableText(fields.chartValue), indexableText(fields.tableCell));
         statements.deleteTrigram.run(unitId);
-        statements.insertTrigram.run(unitId, indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)} ${clean(unit.searchAuxiliaryText)}`));
+        statements.insertTrigram.run(unitId, indexableText(`${clean(unit.title)} ${clean(unit.heading)} ${text} ${clean(unit.nativeText)} ${clean(unit.ocrText)} ${clean(unit.searchAuxiliaryText)} ${fields.caption} ${fields.chartTitle} ${fields.chartSeries} ${fields.chartCategory} ${fields.chartValue} ${fields.tableCell}`));
         statements.unlinkEvidence.run(unitId);
         for (const evidenceId of unit.evidenceIds || []) statements.linkEvidence.run(unitId, clean(evidenceId));
-        if (entry.embedding?.vector?.length) statements.embedding.run(unitId, Number(entry.embedding.dimension || entry.embedding.vector.length), JSON.stringify(entry.embedding.vector), entry.embedding.model ?? null, entry.embedding.generation ?? null);
+        if (entry.embedding?.vector?.length) {
+          const vector = Array.from(entry.embedding.vector);
+          statements.embedding.run(unitId, Number(entry.embedding.dimension || vector.length), JSON.stringify(vector), vectorBlob(vector), entry.embedding.model ?? null, entry.embedding.generation ?? null);
+        }
       }
     });
   }
 
   function listEmbeddings({ dimension = null, model = null, generation = null } = {}) {
-    let sql = "SELECT unit_id AS unitId, dimension, vector_json AS vectorJson, model, generation FROM embeddings";
+    let sql = "SELECT unit_id AS unitId, dimension, vector_json AS vectorJson, vector_blob AS vectorBlob, model, generation FROM embeddings";
     const params = [];
     const conditions = [];
     if (dimension !== null) { conditions.push("dimension = ?"); params.push(Number(dimension)); }
     if (model) { conditions.push("model = ?"); params.push(String(model)); }
     if (generation) { conditions.push("generation = ?"); params.push(String(generation)); }
     if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
-    return db.prepare(sql).all(...params).map((row) => ({ ...row, vector: JSON.parse(row.vectorJson) }));
+    return db.prepare(sql).all(...params).map((row) => ({ ...row, vector: vectorFromBlob(row.vectorBlob) || parseJson(row.vectorJson, []) }));
+  }
+
+  function listEmbeddingIds({ dimension = null, model = null, generation = null } = {}) {
+    let sql = "SELECT unit_id AS unitId, model, generation FROM embeddings";
+    const params = [];
+    const conditions = [];
+    if (dimension !== null) { conditions.push("dimension = ?"); params.push(Number(dimension)); }
+    if (model) { conditions.push("model = ?"); params.push(String(model)); }
+    if (generation) { conditions.push("generation = ?"); params.push(String(generation)); }
+    if (conditions.length) sql += ` WHERE ${conditions.join(" AND ")}`;
+    return db.prepare(sql).all(...params);
   }
 
   function filterUnitIds(unitIds, filters = {}) {
@@ -438,6 +550,7 @@ export function createSearchStore({ directory, filename = "knowledge-base.sqlite
     deleteDocument,
     replaceDocumentIndex,
     listEmbeddings,
+    listEmbeddingIds,
     filterUnitIds,
     searchLexical,
     hydrateUnits,

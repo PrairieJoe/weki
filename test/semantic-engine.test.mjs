@@ -46,3 +46,26 @@ test("semantic engine excludes embeddings from another model generation", async 
   const engine = createSemanticEngine({ store, embedQuery: async () => [1, 0, 0], dimension: 3, model: "model-a", generation: "gen-a" });
   assert.equal((await engine.search("query", { limit: 10 })).length, 1);
 });
+
+test("semantic engine includes embeddings indexed after its first query", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "weki-semantic-refresh-"));
+  const store = createSearchStore({ directory });
+  try {
+    store.upsertDocument({ id: "d1", name: "first.pdf", format: "pdf" });
+    store.upsertKnowledgeUnit({ id: "u1", documentId: "d1", text: "first" });
+    store.upsertEmbedding({ unitId: "u1", vector: [1, 0, 0], model: "test", generation: "first", dimension: 3 });
+    const engine = createSemanticEngine({ store, embedQuery: async () => [0, 1, 0], dimension: 3, model: "test" });
+
+    await engine.search("query", { limit: 2 });
+
+    store.upsertDocument({ id: "d2", name: "second.pdf", format: "pdf" });
+    store.upsertKnowledgeUnit({ id: "u2", documentId: "d2", text: "second" });
+    store.upsertEmbedding({ unitId: "u2", vector: [0, 1, 0], model: "test", generation: "second", dimension: 3 });
+
+    const results = await engine.search("query", { limit: 2 });
+    assert.equal(results[0].unitId, "u2");
+  } finally {
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

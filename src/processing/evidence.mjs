@@ -39,23 +39,45 @@ function hashAsset(asset) {
   return crypto.createHash("sha256").update(`${asset?.name || ""}:${asset?.mime || ""}`).digest("hex");
 }
 
-export function buildEvidenceFragments({ documentId, page, nativeText = "", ocrText = "", table = null, visualAssets = [], maxTokens = 384, overlapTokens = 64 }) {
+export function buildEvidenceFragments({
+  documentId,
+  page,
+  nativeText = "",
+  ocrText = "",
+  textSource = null,
+  context = "",
+  nearbyText = "",
+  table = null,
+  chart = null,
+  visualAssets = [],
+  confidence = null,
+  diagnostics = [],
+  sourceRef = null,
+  caption = "",
+  maxTokens = 384,
+  overlapTokens = 64,
+}) {
   const merged = mergeNativeAndOcr(nativeText, ocrText);
   const fragments = [];
   const origin = nativeText && ocrText ? "merged" : nativeText ? "native" : "ocr";
-  chunkText(merged, { maxTokens, overlapTokens }).forEach((chunk, index) => {
-    fragments.push({ id: `${documentId}:p${page}:text:${index}`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "text", origin, context: chunk.text });
+  const textContext = normalize(context) || merged;
+  chunkText(textContext, { maxTokens, overlapTokens }).forEach((chunk, index) => {
+    fragments.push({ id: `${documentId}:p${page}:text:${index}`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "text", origin: textSource || origin, context: chunk.text, confidence, diagnostics, sourceRef, caption });
   });
   if (table) {
     const headers = Array.isArray(table.headers) ? table.headers.map(normalize).filter(Boolean) : [];
     const rows = Array.isArray(table.rows) ? table.rows : [];
     const tableText = [headers.join(" | "), ...rows.map((row) => (Array.isArray(row) ? row : [row]).map(normalize).join(" | "))].filter(Boolean).join("\n");
-    if (tableText) fragments.push({ id: `${documentId}:p${page}:table:0`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "table", origin: "native", context: tableText });
+    if (tableText) fragments.push({ id: `${documentId}:p${page}:table:0`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "table", origin: "native", context: tableText, structured: { headers, rows }, confidence, diagnostics, sourceRef, caption });
+  }
+  if (chart) {
+    const chartText = [chart.title, ...(chart.categories || []), ...(chart.series || []).flatMap((series) => [series.name, ...(series.values || []), ...(series.categories || []), series.unit])].map(normalize).filter(Boolean).join(" | ");
+    if (chartText) fragments.push({ id: `${documentId}:p${page}:chart:0`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "chart", origin: "native", context: chartText, structured: chart, confidence, diagnostics, sourceRef, caption });
   }
   for (const [index, asset] of (visualAssets || []).entries()) {
-    const context = [asset.ocrText, asset.caption, asset.nearbyText].map(normalize).filter(Boolean).join(" ");
-    if (!context && !asset.name) continue;
-    fragments.push({ id: `${documentId}:p${page}:visual:${index}`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: "visual", origin: asset.ocrText ? "ocr" : "native", assetName: asset.name || null, assetHash: hashAsset(asset), context });
+    const assetContext = [asset.text, asset.ocrText, asset.caption, asset.nearbyText, nearbyText].map(normalize).filter(Boolean).join(" ");
+    if (!assetContext && !asset.name) continue;
+    fragments.push({ id: `${documentId}:p${page}:visual:${index}`, documentId, pageStart: Number(page) || 1, pageEnd: Number(page) || 1, type: asset.assetType || "visual", origin: asset.origin || (asset.ocrText ? "ocr" : "native"), assetName: asset.name || null, assetHash: hashAsset(asset), context: assetContext, structured: asset.chart || asset.table || null, confidence: asset.confidence ?? confidence, diagnostics: asset.diagnostics || diagnostics, sourceRef: asset.sourceRef || sourceRef, caption: asset.caption || caption });
   }
   return fragments;
 }

@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('wekiAiCredentials', {
 
 contextBridge.exposeInMainWorld('wekiApp', {
   restart: () => ipcRenderer.invoke('weki:restart'),
+  watchRuntimeInstall: (startedAt) => ipcRenderer.invoke('weki:watch-runtime-install', startedAt),
 });

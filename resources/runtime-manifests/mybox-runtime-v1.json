@@ -1,0 +1,43 @@
+{
+  "format": "weki-runtime-manifest",
+  "version": 1,
+  "appCompatibility": ">=1.0.0",
+  "license": "MPL-2.0",
+  "source": "mybox",
+  "components": [
+    {
+      "id": "document-renderer",
+      "version": "0.8.4",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "rhwp.js",
+          "size": 404678,
+          "sha256": "d2d2a33e1d75e122a8772fbdb372dcd547f3de4e5a16bf2e663bfb591f17656f"
+        },
+        {
+          "path": "rhwp_bg.wasm",
+          "size": 8038570,
+          "sha256": "e09e8463291f3aded87bb8febdd21610e80b5159329666f114329e10195ea229"
+        },
+        {
+          "path": "LICENSE",
+          "size": 1072,
+          "sha256": "1c3a7d5643b163a3ead4965e1bea33b832caee5bfca265efe42afcd7bc696b5b"
+        }
+      ]
+    },
+    {
+      "id": "presentation-renderer",
+      "version": "26.2.4",
+      "license": "MPL-2.0",
+      "files": [
+        {
+          "path": "LibreOfficePortable_26.2.4_MultilingualStandard.paf.exe",
+          "size": 223657592,
+          "sha256": "4bde93374aef4409243505b20d16561a4628ac7591457dd01fc6e1ccf571ba65"
+        }
+      ]
+    }
+  ]
+}

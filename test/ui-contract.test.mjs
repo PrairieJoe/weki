@@ -7,6 +7,7 @@ const main = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
 const onboarding = await readFile(new URL("../src/onboarding.js", import.meta.url), "utf8").catch(() => "");
 const searchService = await readFile(new URL("../src/search/service.mjs", import.meta.url), "utf8");
 const runtimePresentation = await readFile(new URL("../src/runtime/presentation.mjs", import.meta.url), "utf8");
+const runtimePresentationManifest = await readFile(new URL("../src/runtime/presentation-manifest.mjs", import.meta.url), "utf8");
 const index = await readFile(new URL("../index.html", import.meta.url), "utf8");
 const electronMain = await readFile(new URL("../electron-main.cjs", import.meta.url), "utf8");
 const server = await readFile(new URL("../server.mjs", import.meta.url), "utf8");
@@ -24,6 +25,8 @@ const releaseNotesGenerated = await readFile(new URL("../release/RELEASE_NOTES.m
 const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV123 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.3.md", import.meta.url), "utf8").catch(() => "");
+const releaseNotesV130 = await readFile(new URL("../docs/RELEASE_NOTES_V1.3.0.md", import.meta.url), "utf8").catch(() => "");
+const myboxRuntimeManifest = await readFile(new URL("../resources/runtime-manifests/mybox-runtime-v1.json", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const preloadUrl = new URL("../src/preload.cjs", import.meta.url);
@@ -76,6 +79,12 @@ test("Weki starts without requiring a working GPU process", () => {
   assert.match(electronMain, /appendSwitch\(['"]in-process-gpu['"]\)/);
 });
 
+test("Weki relaunches through a graceful Electron quit", () => {
+  assert.match(electronMain, /app\.relaunch\(\{\s*args:\s*relaunchArguments\(\)\s*\}\);\s*app\.quit\(\);/);
+  assert.match(electronMain, /process\.argv\.slice\(1\)\.filter\(\(argument\) => argument !== runtimeAutoRelaunchArgument\)/);
+  assert.doesNotMatch(electronMain, /app\.relaunch\(\{[^}]*\}\);\s*app\.exit\(0\);/);
+});
+
 test("Weki keeps the Vite server runtime dependency in production dependencies", () => {
   assert.equal(typeof packageJson.dependencies?.vite, "string");
 });
@@ -101,6 +110,14 @@ test("Weki stores the selected data path outside AppData and does not silently f
   assert.match(electronMain, /configureRuntimeStorage/);
   assert.match(electronMain, /path\.join\(dataDir, '\.runtime'\)/);
   assert.doesNotMatch(electronMain, /Weki-runtime-cache/);
+});
+
+test("Electron startup waits for its child server IPC readiness and traces auto-restart startup", () => {
+  assert.match(electronMain, /waitForLocalServerReady/);
+  assert.match(electronMain, /await waitForLocalServerReady\(server\)/);
+  assert.doesNotMatch(electronMain, /await waitForServer\(\)/);
+  assert.match(electronMain, /startup-phase/);
+  assert.match(electronMain, /startup-failed/);
 });
 
 test("Weki asks before granting install-folder storage access and does not silently fall back", () => {
@@ -182,11 +199,25 @@ test("Weki uninstaller stops running app processes before removing files", () =>
   assert.match(uninstall, /taskkill\.exe.*\/F \/T \/IM "\$\{APP_EXECUTABLE_FILENAME\}"/);
 });
 
+test("Weki preserves the data directory and registry pointer during an upgrade", () => {
+  const uninstallStart = installer.indexOf("!macro customUnInstall");
+  const uninstall = installer.slice(uninstallStart);
+  assert.match(uninstall, /\$\{IfNot\} \$\{isUpdated\}[\s\S]*?credentials/);
+  assert.match(uninstall, /\$\{IfNot\} \$\{isUpdated\}[\s\S]*?DeleteRegKey HKCU "Software\\Weki"/);
+  assert.match(installer, /!macro customRemoveFiles/);
+  assert.match(installer, /WekiRemoveInstallFilesKeepData/);
+  assert.match(installer, /StrCmp \$1 "data"/);
+});
+
 test("Weki accepts a MYBOX token in the installer and stores it outside the package", () => {
   const resources = packageJson.build?.extraResources || [];
   assert.equal(resources.some((item) => typeof item === "object" && item.from === ".env"), false);
   assert.match(installer, /WekiMyboxToken/);
   assert.match(installer, /mybox-token\.bootstrap/);
+  assert.match(installer, /mybox-token\.json/);
+  assert.match(installer, /기존 암호화 MYBOX 토큰을 유지합니다/);
+  const tokenLeave = installer.slice(installer.indexOf("Function WekiMyboxTokenPageLeave"), installer.indexOf("FunctionEnd", installer.indexOf("Function WekiMyboxTokenPageLeave")));
+  assert.ok(tokenLeave.indexOf('Delete "$WekiDataDir\\credentials\\.mybox-token.bootstrap"') > tokenLeave.indexOf('${If} $WekiMyboxToken != ""'));
   assert.match(electronMain, /safeStorage/);
   assert.match(electronMain, /mybox-credentials\.mjs/);
   assert.match(electronMain, /WEKI_MYBOX_CREDENTIAL_STATE/);
@@ -196,6 +227,53 @@ test("Weki accepts a MYBOX token in the installer and stores it outside the pack
   assert.match(server, /WEKI_DISABLE_ENV_FILE/);
   assert.match(server, /MYBOX 토큰이 설정되지 않았습니다\. 관리자에게 문의하세요\./);
   assert.match(main, /MYBOX 토큰이 설정되지 않았습니다\. 관리자에게 문의하세요\./);
+});
+
+test("Weki exposes a MYBOX token editor in the installed settings screen", () => {
+  assert.match(main, /function syncMyboxCredentialEditor\(\)/);
+  assert.match(main, /id="mybox-token"/);
+  assert.match(main, /syncMyboxCredentialStatus\(\); syncMyboxCredentialEditor\(\);/);
+  assert.match(electronMain, /loadEncryptedTokenWithFallback/);
+  assert.match(electronMain, /matchingServerReady/);
+  assert.match(electronMain, /findAvailablePort/);
+  assert.match(electronMain, /credential\.credentialState !== credentialState/);
+});
+
+test("Weki does not expose a public LibreOffice installer fallback", () => {
+  assert.match(server, /presentation-renderer는 공개 URL로 설치할 수 없습니다/);
+  assert.match(server, /resolveMyboxPresentationSource\(manifest, \{ required: true \}\)/);
+  assert.match(server, /Weki bundled dependency/);
+  assert.doesNotMatch(runtimePresentationManifest, /download\.documentfoundation\.org/);
+});
+
+test("Weki packages the managed Office dependency manifest and extractor outside the asar", () => {
+  const resources = packageJson.build?.extraResources || [];
+  assert.ok(resources.some((item) => typeof item === "object" && item.from === "resources" && item.to === "resources"));
+  assert.ok(resources.some((item) => typeof item === "object" && item.to === "tools/7zip/7z.exe"));
+  assert.match(server, /WEKI_DEPENDENCY_BUNDLE_PATH/);
+  assert.match(server, /libreoffice-windows-x64\.json/);
+});
+
+test("Weki packages only the Windows x64 ONNX runtime payload", () => {
+  const files = packageJson.build?.files || [];
+  assert.ok(files.includes("!node_modules/onnxruntime-node/bin/napi-v3/darwin/**"));
+  assert.ok(files.includes("!node_modules/onnxruntime-node/bin/napi-v3/linux/**"));
+  assert.ok(files.includes("!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**"));
+  assert.ok(!files.includes("!node_modules/onnxruntime-node/bin/napi-v3/win32/x64/DirectML.dll"));
+});
+
+test("Weki packages only Windows x64 native search binaries", () => {
+  const files = packageJson.build?.files || [];
+  assert.ok(files.includes("!node_modules/better-sqlite3/prebuilds/linux-x64.node"));
+  assert.ok(files.includes("!node_modules/better-sqlite3/prebuilds/darwin-x64.node"));
+  assert.ok(files.includes("!node_modules/usearch/prebuilds/linux*/**"));
+  assert.ok(files.includes("!node_modules/usearch/prebuilds/darwin*/**"));
+  assert.ok(files.includes("!node_modules/usearch/include/**"));
+  assert.ok(files.includes("!node_modules/@rollup/rollup-win32-x64-gnu/**"));
+});
+
+test("Weki limits bundled Electron locales to the supported UI languages", () => {
+  assert.deepEqual(packageJson.build?.electronLanguages, ["en-US", "ko"]);
 });
 
 test("Weki development files remain portable across checkout paths", () => {
@@ -252,22 +330,23 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki source release metadata targets v1.2.3", () => {
-  assert.equal(packageJson.version, "1.2.3");
-  assert.equal(packageLock.version, "1.2.3");
-  assert.equal(packageLock.packages?.[""].version, "1.2.3");
+test("Weki source release metadata targets v1.3.0", () => {
+  assert.equal(packageJson.version, "1.3.0");
+  assert.equal(packageLock.version, "1.3.0");
+  assert.equal(packageLock.packages?.[""].version, "1.3.0");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.2\.3/);
-  assert.match(buildInfo, /Application source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
-  assert.match(latestYml, /version:\s*1\.2\.3/);
-  assert.match(latestYml, /source commit:\s*c027395c045fd438dd06c8d15885f52b98fce9d2/);
-  assert.match(sha256, /Weki-1\.2\.3-Setup\.exe\s+[A-Fa-f0-9]{64}/);
+  assert.match(buildInfo, /Application version:\s*1\.3\.0/);
+  assert.match(buildInfo, /Application source commit:\s*e7bd050a2ef78a1f21447cdd78623be0d1d057ec/);
+  assert.match(latestYml, /version:\s*1\.3\.0/);
+  assert.match(latestYml, /source commit:\s*e7bd050a2ef78a1f21447cdd78623be0d1d057ec/);
+  assert.match(sha256, /Weki-1\.3\.0-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
   assert.match(releaseNotesV123, /1\.2\.3/);
-  assert.match(releaseNotesGenerated, /Source commit: `c027395c045fd438dd06c8d15885f52b98fce9d2`/);
+  assert.match(releaseNotesV130, /LibreOffice/);
+  assert.match(releaseNotesGenerated, /Source commit: `e7bd050a2ef78a1f21447cdd78623be0d1d057ec`/);
 });
 
 test("Weki exposes the nine-step onboarding targets in order", () => {
@@ -355,7 +434,7 @@ test("Weki exposes the Task 6 local and Gemini settings contract", () => {
 
 test("Weki never interpolates a Gemini Key into rendered HTML or status state", () => {
   const credentialStart = main.indexOf("function syncGeminiCredentialEditor");
-  const credentialEnd = main.indexOf("function scheduleRuntimeRestart", credentialStart);
+  const credentialEnd = main.indexOf("async function installAllRuntimeComponents", credentialStart);
   const credentialUi = credentialStart >= 0 && credentialEnd >= 0 ? main.slice(credentialStart, credentialEnd) : "";
   assert.match(credentialUi, /let draftKey/);
   assert.doesNotMatch(credentialUi, /value=\\"\\$\{[^}]*apiKey/);
@@ -416,8 +495,8 @@ test("Weki installer keeps installation-folder copy on the program page and data
   assert.doesNotMatch(dataPage, /NSD_CreateGroupBox\}[^\n]*"설치 폴더"/);
 });
 
-test("Weki v1.2.3 documentation states the shipped onboarding and external-AI policy", () => {
-  assert.match(readme, /v1\.2\.3 현재 정책/);
+test("Weki v1.3.0 documentation states the shipped onboarding and external-AI policy", () => {
+  assert.match(readme, /v1\.3\.0 현재 정책/);
   assert.match(readme, /9단계/);
   assert.match(readme, /사용 가이드/);
   assert.match(readme, /실제 문서나 설정을 변경하지 않습니다/);
@@ -478,6 +557,26 @@ test("Weki installer pages share one custom value-entry layout", () => {
   assert.match(installer, /설치 PC의 선택된 Weki 데이터 저장소/);
   assert.match(installer, /StrCpy \$WekiDataDir "\$INSTDIR\\data"[\s\S]*?ReadRegStr \$0 HKCU "Software\\Weki" "DataDir"/);
   assert.match(installer, /IfFileExists "\$INSTDIR\\Weki\.exe"/);
+});
+
+test("Weki checks TEMP capacity before the embedded app archive is extracted", () => {
+  assert.match(installer, /!macro customInit/);
+  assert.match(installer, /Call WekiCheckTempSpace/);
+  assert.match(installer, /FileOpen \$0 "\$EXEFILE" r/);
+  assert.match(installer, /\$\{DriveSpace\} "\$2" "\/D=F \/S=K" \$3/);
+  assert.match(installer, /\$TEMP/);
+  assert.match(installer, /설치 대상 폴더가 다른 드라이브에 있어도 이 임시공간이 필요합니다/);
+});
+
+test("Weki closes the packaged app process tree before an install or uninstall checks file locks", () => {
+  const processClose = installer.slice(installer.indexOf("!macro customCheckAppRunning"), installer.indexOf("!macroend", installer.indexOf("!macro customCheckAppRunning")));
+  assert.match(processClose, /taskkill\.exe/);
+  assert.match(processClose, /\/T \/IM "\$\{APP_EXECUTABLE_FILENAME\}"/);
+  assert.match(processClose, /\/F \/T/);
+  assert.match(electronMain, /const stopOwnedServer = \(\) =>/);
+  assert.match(electronMain, /child\.once\('exit', finish\)/);
+  assert.match(electronMain, /app\.on\('before-quit'/);
+  assert.match(electronMain, /stopOwnedServer\(\)\.finally\(\(\) => app\.quit\(\)\)/);
 });
 
 test("Weki keeps a removable current registration file selection", () => {
@@ -553,6 +652,26 @@ test("Weki wires source-aware runtime outcomes into stable component rows", () =
   assert.ok(main.indexOf('entry.requiresMybox&&entry.installable===false') < main.indexOf('entry.status==="failed"&&entry.error'));
 });
 
+test("Weki makes the active full-install component and indeterminate progress visible", () => {
+  assert.match(main, /runtimeBatchProgress\(data\?\.installBatch\)/);
+  assert.match(main, /설치 진행 중 · \$\{batchProgress\.currentStep\}\/\$\{batchProgress\.total\}/);
+  assert.match(main, /batchProgress\?\.componentId===entry\.id\?\{label:"진행 중",disabled:true\}/);
+  assert.match(main, /installing=entries\.some\(\(entry\)=>entry\.status==="installing"\)\|\|Boolean\(batchProgress\)/);
+  assert.match(main, /runtime-progress runtime-batch-progress is-indeterminate/);
+  assert.match(main, /aria-valuetext="진행률 확인 중"/);
+  assert.match(styles, /\.runtime-progress\.is-indeterminate i em\{width:30%;animation:runtime-indeterminate/);
+  assert.match(styles, /@media\(prefers-reduced-motion:reduce\)\{\.runtime-progress\.is-indeterminate i em\{animation:none/);
+});
+
+test("Weki publishes HWP renderer metadata through the MYBOX runtime manifest", () => {
+  assert.match(myboxRuntimeManifest, /"id": "document-renderer"/);
+  assert.match(myboxRuntimeManifest, /"version": "0\.8\.4"/);
+  assert.match(myboxRuntimeManifest, /"path": "rhwp\.js"/);
+  assert.match(myboxRuntimeManifest, /"path": "rhwp_bg\.wasm"/);
+  assert.match(main, /presentation-renderer/);
+  assert.match(main, /semantic-model","semantic-reranker","document-renderer","presentation-renderer/);
+});
+
 test("Weki persists the processing default and derives Local AI readiness", () => {
   assert.match(main, /defaultProcessingMode/);
   assert.match(main, /\/api\/settings/);
@@ -578,7 +697,7 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(server, /source === "mybox"/);
   assert.match(server, /baseUrl = `mybox:\/\/runtime/);
   assert.doesNotMatch(server, /for \(const file of component\.files\) file\.url/);
-  assert.match(server, /restartRequired: \["semantic-model", "semantic-reranker", "document-renderer"\]\.includes\(component\.id\)/);
+  assert.match(server, /restartRequired: \["semantic-model", "semantic-reranker", "document-renderer", presentationComponentId\]\.includes\(component\.id\)/);
   assert.match(main, /document-renderer-install-slot/);
   assert.doesNotMatch(main, /id="install-mybox-renderer"/);
   assert.match(server, /runtimeComponents/);
@@ -588,12 +707,20 @@ test("Weki exposes runtime status, install progress and a restart action", () =>
   assert.match(main, /myboxRendererInstalling/);
   assert.match(main, /MYBOX_RUNTIME_CACHE_TTL/);
   assert.match(main, /manifest가 아직 게시되지 않았습니다/);
+  assert.match(server, /WEKI_MYBOX_MANIFEST_TIMEOUT_MS/);
 });
 
-test("Weki refreshes active jobs before deciding whether runtime install may restart", () => {
-  const polling = main.match(/function startRuntimePolling\(\).*?function resetMyboxRuntimeCache/s)?.[0] || "";
-  assert.match(polling, /fetch\("\/api\/jobs"\)/);
-  assert.ok(polling.indexOf('fetch("/api/jobs")') < polling.indexOf("scheduleRuntimeRestart"));
+test("Weki delegates runtime-install completion monitoring and relaunch to the main process", () => {
+  assert.match(main, /armRuntimeInstallAutoRestart/);
+  assert.match(main, /startedAt:data\.startedAt/);
+  assert.doesNotMatch(main, /function scheduleRuntimeRestart/);
+  assert.match(preload, /watchRuntimeInstall:.*weki:watch-runtime-install/);
+  assert.match(electronMain, /ipcMain\.handle\('weki:watch-runtime-install'/);
+  assert.match(electronMain, /monitorRuntimeInstallAutoRestart/);
+  assert.match(electronMain, /watch\.relaunchRequested\s*=\s*true/);
+  assert.match(electronMain, /if \(!watch\.relaunchRequested\) writeRuntimeRestartLog/);
+  assert.match(electronMain, /runtime-restart\.log/);
+  assert.match(electronMain, /fetch\(`\$\{appUrl\}\/api\/jobs`\)/);
 });
 
 test("Weki keeps search-index recovery out of the renderer settings UI", () => {
@@ -615,13 +742,24 @@ test("Weki exposes only the app release version while retaining internal compati
   assert.doesNotMatch(main, /data-backup/);
   assert.match(main, /import packageJson from "\.\.\/package\.json"/);
   assert.match(main, /const APP_VERSION = packageJson\.version/);
-  assert.match(main, /앱 버전 \$\{APP_VERSION\}/);
+  assert.doesNotMatch(main, /app-version-info/);
+  assert.doesNotMatch(main, /APPLICATION/);
   assert.match(main, /data-runtime-version="\$\{escape\(installable\[entry\.id\]\.version\)\}"/);
   assert.doesNotMatch(main, /status\.textContent=`\$\{statusText\}\$\{entry\.version/);
   assert.doesNotMatch(main, /\$\{escape\(statusLabel\[entry\.status\]\|\|entry\.status\)\}\$\{entry\.version/);
   assert.doesNotMatch(main, /문서 화면 처리기 \$\{renderer\.version\} 배포본/);
   assert.match(main, /문서 화면 처리기 배포본을 확인했습니다\./);
   assert.match(searchService, /export const RANKING_VERSION/);
+});
+
+test("Weki exposes the release version in the sidebar and pairs retrieval with AI defaults", () => {
+  assert.match(main, /function syncSidebarVersion/);
+  assert.match(main, /className="app-version"/);
+  assert.match(main, /function syncSettingsCardLayout/);
+  assert.match(main, /"AI DEFAULT":2/);
+  assert.match(main, /"RETRIEVAL":3/);
+  assert.match(styles, /retrieval-settings\{order:1\}/);
+  assert.match(styles, /external-ai-settings\{order:2\}/);
 });
 
 test("Weki records the effective analysis mode and semantic indexing stage", () => {

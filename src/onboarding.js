@@ -229,34 +229,42 @@ export function createOnboardingController(options = {}) {
 
   const dragListeners = {
     pointerdown(event) {
-      if (isMobile(windowRef, documentRef) || event.target !== dragHandle) return;
+      if (isMobile(windowRef, documentRef)) return;
+      const interactive = event.target?.closest?.("button,input,select,textarea,a,[data-onboarding-no-drag]");
+      if (interactive) return;
       const dialog = root?.querySelector("[role=dialog]");
       const rect = dialog?.getBoundingClientRect?.();
       if (!dialog || !rect) return;
       event.preventDefault();
       const position = state.dialogPosition || { left: rect.left, top: rect.top };
       dragState = { pointerId: event.pointerId, startX: Number(event.clientX) || 0, startY: Number(event.clientY) || 0, startLeft: position.left, startTop: position.top };
+      for (const type of ["pointermove", "pointerup", "pointercancel"]) dragHandle.addEventListener(type, dragListeners[type]);
       try { dragHandle.setPointerCapture?.(event.pointerId); } catch { /* optional */ }
     },
     pointermove(event) { updateDialogPosition(event); },
-    pointerup(event) { if (dragState?.pointerId === event.pointerId) cleanupDrag(); },
-    pointercancel(event) { if (dragState?.pointerId === event.pointerId) cleanupDrag(); },
+    pointerup(event) { if (dragState?.pointerId === event.pointerId) finishDrag(); },
+    pointercancel(event) { if (dragState?.pointerId === event.pointerId) finishDrag(); },
   };
 
-  function cleanupDrag() {
+  function finishDrag() {
     if (!dragHandle) { dragState = null; return; }
     for (const type of ["pointermove", "pointerup", "pointercancel"]) dragHandle.removeEventListener(type, dragListeners[type]);
     if (dragState?.pointerId != null) {
       try { dragHandle.releasePointerCapture?.(dragState.pointerId); } catch { /* already released */ }
     }
+    dragState = null;
+  }
+
+  function cleanupDrag() {
+    if (!dragHandle) { dragState = null; return; }
+    finishDrag();
     dragHandle.removeEventListener("pointerdown", dragListeners.pointerdown);
     dragHandle = null;
-    dragState = null;
   }
 
   function bindDrag(dialog) {
     cleanupDrag();
-    dragHandle = dialog?.querySelector?.("[data-onboarding-drag-handle]") || null;
+    dragHandle = dialog || null;
     if (!dragHandle) return;
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) dragHandle.addEventListener(type, dragListeners[type]);
   }

@@ -1,5 +1,5 @@
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-import { compactKoreanSpacing, containsExactRouteCode, extractRouteCodes, extractSearchTerms, hasRequiredSearchTerms, matchesRouteConstraints, normalizeSearchText, searchTermVariants } from "./query-normalization.mjs";
+import { compactKoreanSpacing, containsExactRouteCode, extractRouteCodes, extractSearchTerms, hasRequiredSearchTerms, matchesRouteConstraints, meaningfulSearchTerms, normalizeSearchText, searchTermVariants } from "./query-normalization.mjs";
 
 export function normalizeSearchRequest(input = {}) {
   const query = normalizeSearchText(input.query);
@@ -82,6 +82,38 @@ function matchingTermCount(value, terms) {
   }).length;
 }
 
+function structuredValues(row) {
+  const structured = row?.structured || {};
+  const chart = row?.chart || structured.chart || {};
+  const table = row?.table || structured.table || {};
+  return [
+    row?.caption, row?.chartTitle, row?.chartSeries, row?.chartCategory, row?.chartValue, row?.tableCell,
+    chart.title, ...(chart.categories || []), ...(chart.series || []).flatMap((series) => [series?.name, ...(series?.categories || []), ...(series?.values || [])]),
+    ...(table.headers || []), ...(table.rows || []).flatMap((line) => Array.isArray(line) ? line : [line]), ...(table.cells || []).map((cell) => cell?.value),
+  ].filter(Boolean);
+}
+
+function evidenceValues(row) {
+  return [
+    row?.title, row?.heading, row?.text, row?.nativeText, row?.ocrText, row?.searchAuxiliaryText,
+    ...structuredValues(row), ...(row?.evidence || []).flatMap((item) => [item.context, item.caption]),
+  ].filter(Boolean);
+}
+
+function ocrTolerantText(value) {
+  return normalizedMatchText(value)
+    .replace(/[oо]/gu, "0")
+    .replace(/[il|]/gu, "1")
+    .replace(/[s]/gu, "5");
+}
+
+function hasOcrTolerantCoverage(query, values) {
+  const terms = meaningfulSearchTerms(query);
+  const haystack = ocrTolerantText(values.filter(Boolean).join(" "));
+  if (!terms.length) return true;
+  return terms.every((term) => searchTermVariants(term).some((variant) => haystack.includes(ocrTolerantText(variant))));
+}
+
 function compactMatchSpan(value, query) {
   const text = compactKoreanSpacing(normalizeSearchText(value)).toLocaleLowerCase();
   const terms = extractSearchTerms(query).flatMap((term) => searchTermVariants(term)).map((term) => compactKoreanSpacing(term).toLocaleLowerCase()).filter(Boolean);
@@ -102,9 +134,10 @@ export function evidenceProximityScore(row, query = "") {
 export function evidenceMatchPriority(row, query = "") {
   const terms = normalizedQueryTerms(query);
   return (row?.evidence || []).reduce((best, item) => {
-    const contextMatches = matchingTermCount(item.context, terms);
-    const ocrMatches = item.type === "visual" ? matchingTermCount(row.ocrText, terms) : 0;
-    const priority = (ocrMatches * 100) + (contextMatches * 10) + (item.type === "visual" && contextMatches ? 1 : 0);
+    const contextMatches = matchingTermCount([item.context, item.caption, item.chartTitle, item.chartSeries, item.chartCategory, item.chartValue, item.tableCell].filter(Boolean).join(" "), terms);
+    const ocrMatches = (item.origin === "ocr" || item.type === "visual" || item.type === "chart" || item.type === "table")
+      ? matchingTermCount([row.ocrText, row.chartTitle, row.chartSeries, row.chartCategory, row.chartValue, row.tableCell].filter(Boolean).join(" "), terms) : 0;
+    const priority = (ocrMatches * 100) + (contextMatches * 10) + (item.type !== "text" && contextMatches ? 1 : 0);
     return Math.max(best, priority);
   }, 0);
 }
@@ -115,9 +148,9 @@ export function selectEvidence(results, { limit = 5, lowRelevanceThreshold = 0.2
   return diversified.map((row) => {
     const evidence = Array.isArray(row.evidence) ? row.evidence : [];
     const rankedEvidence = evidence.map((item, index) => {
-      const matches = matchingTermCount(item.context, terms);
-      const visualOcrMatches = item.type === "visual" ? matchingTermCount(row.ocrText, terms) : 0;
-      return { item, index, matches, visualOcrMatches, visualBonus: item.type === "visual" && matches ? 1 : 0 };
+      const matches = matchingTermCount([item.context, item.caption, item.chartTitle, item.chartSeries, item.chartCategory, item.chartValue, item.tableCell].filter(Boolean).join(" "), terms);
+      const visualOcrMatches = (item.origin === "ocr" || item.type !== "text") ? matchingTermCount([row.ocrText, row.chartTitle, row.chartSeries, row.chartCategory, row.chartValue, row.tableCell].filter(Boolean).join(" "), terms) : 0;
+      return { item, index, matches, visualOcrMatches, visualBonus: item.type !== "text" && matches ? 1 : 0 };
     }).sort((left, right) => right.visualOcrMatches - left.visualOcrMatches || right.matches - left.matches || right.visualBonus - left.visualBonus || left.index - right.index);
     const matchedEvidence = (rankedEvidence[0]?.matches || rankedEvidence[0]?.visualOcrMatches ? rankedEvidence[0].item : evidence[0]) || null;
     return {
@@ -129,14 +162,23 @@ export function selectEvidence(results, { limit = 5, lowRelevanceThreshold = 0.2
 }
 
 export function filterRouteConstrainedResults(results, query = "") {
-  return (results || []).filter((row) => matchesRouteConstraints(query, [row.title, row.heading, row.text, row.nativeText, row.ocrText]));
+  return (results || []).filter((row) => matchesRouteConstraints(query, evidenceValues(row)));
 }
 
 export function filterDirectEvidenceResults(results, query = "") {
   return (results || []).filter((row) => {
-    const isVisual = (row.evidence || []).some((item) => item.type === "visual");
-    const values = isVisual ? [row.title, row.heading, row.ocrText] : [row.title, row.heading, row.text, row.nativeText, row.ocrText];
-    return hasRequiredSearchTerms(query, values);
+    const values = evidenceValues(row);
+    const ocrValues = [row.ocrText, ...(row.evidence || []).filter((item) => item.origin === "ocr").map((item) => item.context), ...structuredValues(row)].filter(Boolean);
+    const routeCodes = extractRouteCodes(query);
+    if (routeCodes.length) {
+      if (!matchesRouteConstraints(query, values)) return false;
+      const contentTerms = meaningfulSearchTerms(query).filter((term) => !/^\d+(?:-\d+)*$/u.test(term));
+      const contentCovered = contentTerms.every((term) => searchTermVariants(term).some((variant) => values.some((value) => normalizedMatchText(value).includes(normalizedMatchText(variant)))));
+      if (contentCovered || !contentTerms.length) return true;
+      return ocrValues.length > 0 && matchesRouteConstraints(query, ocrValues);
+    }
+    if (hasRequiredSearchTerms(query, values)) return true;
+    return ocrValues.length > 0 && hasOcrTolerantCoverage(query, ocrValues);
   });
 }
 

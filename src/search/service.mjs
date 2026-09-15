@@ -80,7 +80,13 @@ export function createSearchService({ store, semanticSearch = null, reranker = n
           const snippet = buildEvidenceSnippet(row.matchedEvidence.context, request.query);
           return { ...row.matchedEvidence, snippet: snippet.text, matchedTerms: snippet.matchedTerms, truncated: snippet.truncated };
         })() : null,
+        evidenceType: row.matchedEvidence?.type || null,
+        evidenceOrigin: row.matchedEvidence?.origin || null,
+        evidenceConfidence: row.matchedEvidence?.confidence ?? row.confidence ?? null,
+        evidenceDiagnostics: row.matchedEvidence?.diagnostics || [],
+        evidenceSourceRef: row.matchedEvidence?.sourceRef || null,
         sourceRange: row.sourceRange,
+        locationPrefix: String(row.format || "").toLowerCase() === "pptx" ? "슬라이드" : String(row.format || "").toLowerCase() === "hwp" ? "섹션" : "p.",
         relevanceScore: row.score,
         displayScore: formatDisplayScore(row.score),
         lowRelevance: row.lowRelevance,

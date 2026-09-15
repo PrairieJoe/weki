@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "libreoffice",
+  "version": "26.2.4",
+  "platform": "win32-x64",
+  "format": "paf-exe",
+  "sha256": "4bde93374aef4409243505b20d16561a4628ac7591457dd01fc6e1ccf571ba65",
+  "entrypoint": "App/libreoffice/program/soffice.exe",
+  "acquisition": ["mybox", "offline-bundle"],
+  "installMode": "portable-extract-only",
+  "status": "release-pinned",
+  "license": "MPL-2.0"
+}

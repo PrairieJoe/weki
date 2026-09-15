@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { clearEncryptedToken, credentialPath, bootstrapPath, consumeTokenBootstrap, loadEncryptedToken, writeEncryptedToken } from "../src/server/mybox-credentials.mjs";
+import { clearEncryptedToken, credentialPath, bootstrapPath, consumeTokenBootstrap, loadEncryptedToken, loadEncryptedTokenWithFallback, writeEncryptedToken } from "../src/server/mybox-credentials.mjs";
 
 async function tempStore() {
   return fs.mkdtemp(path.join(os.tmpdir(), "weki-credentials-test-"));
@@ -33,6 +33,20 @@ test("MYBOX credential failures are reported without enabling a plaintext fallba
   await writeEncryptedToken(dataDir, "ciphertext:opaque");
   assert.equal((await loadEncryptedToken(dataDir, async () => { throw new Error("DPAPI failure"); })).state, "unreadable");
   assert.equal((await loadEncryptedToken(path.join(dataDir, "missing"), async () => "never")).state, "missing");
+});
+
+test("MYBOX credential fallback migrates an existing encrypted token to the active store", async () => {
+  const activeDir = await tempStore();
+  const previousDir = await tempStore();
+  await writeEncryptedToken(previousDir, "ciphertext:existing");
+
+  const result = await loadEncryptedTokenWithFallback(activeDir, [previousDir], async (ciphertext) => {
+    assert.equal(ciphertext, "ciphertext:existing");
+    return "existing-secret";
+  });
+
+  assert.deepEqual(result, { state: "available", token: "existing-secret" });
+  assert.deepEqual(await loadEncryptedToken(activeDir, async (ciphertext) => ciphertext), { state: "available", token: "ciphertext:existing" });
 });
 
 test("clearing a MYBOX credential removes only the encrypted local record", async (t) => {

@@ -499,26 +499,32 @@ test("온보딩 정적 결과·근거 예시는 상태 저장소 없이 렌더�
   assert.equal(controller.getState().step.id, "example-evidence");
   assert.ok(documentRef.querySelector('[data-onboarding-example="evidence"]'));
   assert.equal(documentRef.querySelector('[data-document-id]'), null);
-  const title = documentRef.querySelector("[data-onboarding-drag-handle]");
-  assert.equal(title.listenerCount("pointerdown"), 1);
+  const dialog = documentRef.querySelector("[role=dialog]");
+  assert.equal(dialog.listenerCount("pointerdown"), 1);
   await controller.close();
-  assert.equal(title.listenerCount("pointerdown"), 0);
+  assert.equal(dialog.listenerCount("pointerdown"), 0);
 });
 
-test("온보딩은 desktop 제목 drag만 허용하고 위치를 clamp한다", async () => {
+test("온보딩은 desktop dialog 어디서든 반복 drag하고 위치를 clamp한다", async () => {
   const documentRef = new FakeDocument();
   const windowRef = createFakeWindow();
   const controller = createOnboardingController({ documentRef, windowRef, storage: new FakeStorage(), getCurrentPage: () => "search" });
   await controller.start();
   const dialog = documentRef.querySelector("[role=dialog]");
-  const title = documentRef.querySelector("[data-onboarding-drag-handle]");
   dialog.rect = { left: 100, top: 100, width: 300, height: 200 };
-  const event = { target: title, pointerId: 1, clientX: 120, clientY: 120, preventDefault() { this.prevented = true; } };
-  title.listeners.get("pointerdown")[0](event);
-  title.listeners.get("pointermove")[0]({ target: title, pointerId: 1, clientX: -1000, clientY: -1000 });
+  const event = { target: dialog, pointerId: 1, clientX: 120, clientY: 120, preventDefault() { this.prevented = true; } };
+  dialog.listeners.get("pointerdown")[0](event);
+  dialog.listeners.get("pointermove")[0]({ target: dialog, pointerId: 1, clientX: -1000, clientY: -1000 });
   assert.equal(event.prevented, true);
   assert.equal(dialog.style.left, "8px");
   assert.equal(dialog.style.top, "8px");
+  dialog.listeners.get("pointerup")[0]({ pointerId: 1 });
+  const second = { target: dialog, pointerId: 2, clientX: 120, clientY: 120, preventDefault() { this.prevented = true; } };
+  dialog.listeners.get("pointerdown")[0](second);
+  dialog.listeners.get("pointermove")[0]({ target: dialog, pointerId: 2, clientX: 140, clientY: 140 });
+  assert.equal(second.prevented, true);
+  assert.equal(dialog.style.left, "28px");
+  assert.equal(dialog.style.top, "28px");
   windowRef.innerWidth = 360;
   windowRef.innerHeight = 640;
   controller.refreshTarget();

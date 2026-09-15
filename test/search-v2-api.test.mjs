@@ -334,12 +334,16 @@ test("runtime status keeps all component rows when only one source manifest is a
   t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
   const body = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
-  assert.deepEqual(Object.keys(body.components).sort(), ["document-renderer", "semantic-model", "semantic-reranker"]);
+  assert.deepEqual(Object.keys(body.components).sort(), ["document-renderer", "presentation-renderer", "semantic-model", "semantic-reranker"]);
   assert.equal(body.components["document-renderer"].sourceType, "mybox");
   assert.equal(body.components["document-renderer"].requiresMybox, true);
   assert.equal(body.components["semantic-reranker"].status, "missing");
   assert.equal(body.components["semantic-reranker"].installable, true);
   assert.equal(body.components["semantic-reranker"].sourceType, "bundled");
+  assert.equal(body.components["presentation-renderer"].status, "missing");
+  assert.equal(body.components["presentation-renderer"].installable, true);
+  assert.equal(body.components["presentation-renderer"].sourceType, "mybox");
+  assert.equal(body.components["presentation-renderer"].requiresMybox, true);
 });
 
 test("runtime status retains the source of an installed pack after another manifest replaces the root manifest", async (t) => {
@@ -359,7 +363,7 @@ test("runtime status retains the source of an installed pack after another manif
   assert.equal(body.components["semantic-reranker"].availableVersion, "1.0.0");
 });
 
-test("document-renderer install and batch resolution reject public manifests", async (t) => {
+test("document-renderer rejects public manifests while exposing the bundled MYBOX catalog", async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-public-renderer-policy-"));
   await writePublicRendererManifest(dataDir);
   const server = await startServer(dataDir);
@@ -369,8 +373,8 @@ test("document-renderer install and batch resolution reject public manifests", a
   const status = await (await fetch(`${base}/api/runtime/components`)).json();
   assert.equal(status.components["document-renderer"].sourceType, "mybox");
   assert.equal(status.components["document-renderer"].requiresMybox, true);
-  assert.equal(status.components["document-renderer"].installable, false);
-  assert.equal(status.installable["document-renderer"], undefined);
+  assert.equal(status.components["document-renderer"].installable, true);
+  assert.equal(status.installable["document-renderer"].version, "0.8.4");
   const direct = await fetch(`${base}/api/runtime/components/install`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -695,8 +699,69 @@ test("MYBOX manifest parse failures remain failed with their concrete error", as
   assert.equal(refreshed.installable["document-renderer"].sourceType, "mybox");
   assert.deepEqual(runtimeAction(renderer, refreshed.installable["document-renderer"]), { label: "재시도", disabled: false });
   const persisted = JSON.parse(await fs.readFile(path.join(dataDir, "runtime", "v1", "component-state.json"), "utf8"));
-  assert.equal(persisted.components["document-renderer"].version, null);
+  assert.equal(persisted.components["document-renderer"].version, "0.8.4");
   assert.equal(persisted.components["document-renderer"].sourceType, "mybox");
+});
+
+test("presentation renderer does not fall back to public download after a MYBOX resolution failure", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-presentation-mybox-failure-"));
+  const libreOfficeManifestPath = path.join(dataDir, "libreoffice-manifest.json");
+  const publicManifest = {
+    schemaVersion: 1,
+    name: "libreoffice",
+    version: "26.2.4",
+    platform: "win32-x64",
+    format: "paf-exe",
+    url: "",
+    sha256: "b".repeat(64),
+    entrypoint: "App/libreoffice/program/soffice.exe",
+  };
+  let apiBase = "";
+  let publicDownloadRequests = 0;
+  const remoteManifest = {
+    format: "weki-runtime-manifest",
+    version: 1,
+    appCompatibility: ">=1.0.0",
+    source: "mybox",
+    components: [{
+      id: "presentation-renderer",
+      version: "26.2.4",
+      files: [{ path: "LibreOfficePortable_26.2.4_MultilingualStandard.paf.exe", size: 1, sha256: "b".repeat(64) }],
+    }],
+  };
+  const provider = createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const json = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+    if (url.pathname === "/v1/drive/resources") return json({ resources: [{ resourceId: "wiki-id", name: "wiki", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/wiki-id/resources") return json({ resources: [{ resourceId: "runtime-id", name: "runtime", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/runtime-id/resources") return json({ resources: [{ resourceId: "v1-id", name: "v1", type: "folder" }] });
+    if (url.pathname === "/v1/drive/folders/v1-id/resources") return json({ resources: [{ resourceId: "manifest-id", name: "manifest.json", type: "file" }] });
+    if (url.pathname === "/v1/drive/files/manifest-id/download") return json({ downloadUrl: `${apiBase}/v1/runtime-manifest` });
+    if (url.pathname === "/v1/runtime-manifest") return json(remoteManifest);
+    if (url.pathname === "/public-bundle") { publicDownloadRequests += 1; res.end("public fallback"); return; }
+    res.statusCode = 404;
+    return res.end();
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  apiBase = `http://127.0.0.1:${provider.address().port}`;
+  publicManifest.url = `${apiBase}/public-bundle`;
+  await fs.writeFile(libreOfficeManifestPath, JSON.stringify(publicManifest));
+  const server = await startServer(dataDir, { env: {
+    NAVER_MBOX_TOKEN: "test-token",
+    WEKI_MYBOX_API_BASE: `${apiBase}/v1`,
+    WEKI_LIBREOFFICE_MANIFEST: libreOfficeManifestPath,
+  } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await new Promise((resolve) => provider.close(resolve)); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "presentation-renderer" }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400, JSON.stringify(body));
+  assert.equal(publicDownloadRequests, 0);
+  assert.match(body.error, /MYBOX runtime 파일이 없습니다: presentation-renderer\/26\.2\.4\//);
 });
 
 test("public runtime retry still requires a manifest and version", async (t) => {
@@ -764,7 +829,7 @@ test("valid MYBOX manifests without the requested component are unavailable", as
   assert.deepEqual(batch.results["document-renderer"], { status: "unavailable", reason: "runtime_pack_not_configured" });
   assert.deepEqual(batch.unavailable, ["document-renderer"]);
   assert.deepEqual(batch.failed, []);
-  assert.equal(runtime.components["document-renderer"].reason, "runtime_pack_not_configured");
+  assert.equal(runtime.components["document-renderer"].reason, null);
   assert.match(runtimeBatchMessage(batch), /MYBOX 배포본/);
 });
 
@@ -778,8 +843,24 @@ test("clean installs keep the document renderer uninstalled until a runtime pack
   assert.equal(status.components["document-renderer"].applied, false);
   assert.equal(status.components["document-renderer"].sourceType, "mybox");
   assert.equal(status.components["document-renderer"].requiresMybox, true);
-  assert.equal(status.components["document-renderer"].installable, false);
-  assert.equal(status.components["document-renderer"].reason, "runtime_pack_not_configured");
+  assert.equal(status.components["document-renderer"].installable, true);
+  assert.equal(status.components["document-renderer"].availableVersion, "0.8.4");
+  assert.equal(status.components["document-renderer"].reason, null);
+});
+
+test("presentation renderer rejects public download when MYBOX and offline bundle are unavailable", async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "weki-presentation-mybox-required-"));
+  const server = await startServer(dataDir, { env: { WEKI_DEPENDENCY_BUNDLE_PATH: path.join(dataDir, "missing-libreoffice.paf.exe") } });
+  t.after(async () => { server.child.kill(); await delay(200); await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/runtime/components/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ componentId: "presentation-renderer" }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 400, JSON.stringify(body));
+  assert.match(body.error, /MYBOX LibreOffice 설치에는 개인 액세스 토큰이 필요합니다/);
 });
 
 test("persisted public renderer state stays non-installable without MYBOX metadata", async (t) => {
@@ -795,12 +876,12 @@ test("persisted public renderer state stays non-installable without MYBOX metada
   const status = await (await fetch(`http://127.0.0.1:${server.port}/api/runtime/components`)).json();
   const renderer = status.components["document-renderer"];
   assert.equal(renderer.status, "failed");
-  assert.equal(renderer.installable, false);
+  assert.equal(renderer.installable, true);
   assert.equal(renderer.sourceType, "mybox");
   assert.equal(renderer.requiresMybox, true);
-  assert.equal(renderer.reason, "runtime_pack_not_configured");
-  assert.equal(status.installable["document-renderer"], undefined);
-  assert.equal(runtimeAction(renderer, status.installable["document-renderer"]), null);
+  assert.equal(renderer.reason, null);
+  assert.equal(status.installable["document-renderer"].version, "0.8.4");
+  assert.deepEqual(runtimeAction(renderer, status.installable["document-renderer"]), { label: "재시도", disabled: false });
 });
 
 test("MYBOX renderer retry uses the MYBOX transport for relative runtime files", async (t) => {
