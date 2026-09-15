@@ -1,39 +1,53 @@
-# Weki v1.2.3
+# Weki v1.3.0
 
-## 사용자에게 달라지는 점
+## 핵심 방향
 
-- 신규 설치에서 선택형 9단계 온보딩 투어가 시작됩니다. `문서 등록 화면 → 파일 선택 → 처리 모드 → 처리 대기열 → 문서 관리 → 질문 검색 → 검색 결과 예시 → 근거 예시 → MYBOX와 저장소` 순서로 실제 이용 흐름을 설명합니다.
-- 투어는 실제 문서·검색·설정·MYBOX를 변경하지 않습니다. 검색 결과와 근거 단계는 정적 예시이며, `건너뛰기`·닫기·완료로 종료할 수 있습니다. 완료한 설치 프로필에는 투어가 자동으로 다시 재생되지 않고, `사용 가이드`를 선택할 때만 1단계부터 재생됩니다.
-- 데스크톱에서는 제목 영역을 드래그해 안내창을 옮길 수 있고 화면 안쪽으로 제한합니다. 모바일에서는 안내창을 중앙에 유지합니다.
-- 기본 처리 모드는 `설치된 모델 사용`과 `외부 AI 사용` 두 가지로 표시합니다. 문서별 등록 화면의 선택지는 `경량 처리만`, `Local AI 허용`, `External AI 허용` 세 가지입니다.
+v1.3.0의 문서 처리 품질 개선은 HWP 호환성 보완과 Office 문서 렌더링을 서로 대체하지 않고 병렬로 운영합니다.
 
-## External AI, 보안 및 전송 고지
+- `@rhwp/core@0.8.4`: HWP/HWPX 전용 renderer
+- LibreOffice Portable `26.2.4`: DOCX/PPTX 실제 페이지·슬라이드 렌더러
+- native parser·OCR fallback: 선택형 runtime이 없거나 실패한 경우에도 등록·검색 지속
 
-- Gemini Key는 이 PC에 암호화해 저장하며 화면·상태·로그에 다시 표시하지 않습니다. Key와 모델이 준비되지 않아도 외부 AI 선호 설정은 저장할 수 있지만 실제 처리는 준비 상태에 따라 fallback합니다.
-- `External AI 허용`은 문서 전처리 보조와 검색 보조 색인만을 위한 처리 상한입니다. 외부 전송은 페이지·슬라이드에서 추출한 텍스트와 선택한 이미지만으로 제한할 수 있으며 전체 원본 파일, 전체 프롬프트, 로컬 저장 경로, 근거 원문 전체는 전송하지 않습니다.
-- Gemini 전송 상한은 텍스트 최대 12,000자, 이미지 최대 4개, 이미지당 최대 2 MiB, 전체 이미지 최대 8 MiB입니다. 요청 제한 시간은 30초입니다.
-- External AI를 OFF에서 ON으로 바꾸는 모든 전환과 문서별 `External AI 허용` 선택에는 동의 확인이 필요합니다. 동의하지 않으면 해당 선택은 유지되지 않습니다.
-- 외부 AI가 미설정·미선택·연결 실패·응답 오류로 사용할 수 없으면 `External AI → Local AI → 경량 처리` 순으로 허용된 경로를 사용합니다. 외부 AI를 끄면 신규 작업부터 외부 처리가 차단되며, 이미 Queue에 등록된 작업은 등록 당시 snapshot 정책을 유지합니다.
-- DOCX 이미지는 문서 관계와 명시적 페이지 나눔을, HWPX 이미지는 참조 섹션을 우선해 시각 근거 페이지를 연결합니다. 원본 형식에서 페이지 연결을 제공하지 않는 이미지는 ZIP 경로 순서 기반의 고정된 논리 페이지 fallback을 사용하며, 후속 이미지를 모두 1페이지로 잘못 묶지 않습니다.
-- Gemini가 생성하는 summary·topic·keywords·visual description은 검색 보조 메타데이터입니다. 원문 Evidence를 대체하지 않으며, 최종 답변 생성은 이번 릴리스 범위에 포함하지 않습니다.
+## 검색 정확도 개선
 
-## 설치기
+- 통짜 이미지 PDF는 기존 전체 페이지 OCR과 visual evidence를 유지합니다.
+- PPTX는 슬라이드 XML, native 표, 차트 XML/embedded workbook을 구조적으로 추출합니다.
+- LibreOffice가 준비된 PPTX/DOCX는 실제 렌더링 결과를 PNG로 변환해 OCR하고, 이미지에만 존재하는 텍스트를 페이지·슬라이드 근거로 색인합니다.
+- HWP/HWPX는 rhwp 렌더링 provenance를 사용하고, 지원하지 않는 구조는 기존 parser/OCR fallback으로 보존합니다.
+- 렌더링 결과와 native/OCR 출처를 evidence provenance 및 미리보기 자산으로 유지합니다.
 
-- 문서 데이터 저장 위치를 선택하는 페이지의 그룹 제목을 `문서 데이터 저장 위치`로 변경했습니다.
-- 프로그램 설치 위치를 지정하는 페이지의 그룹 제목 `설치 폴더`는 유지했습니다. 두 페이지의 역할을 혼동하지 않도록 구분한 변경입니다.
+## 설치·배포
 
-## 검증 범위
+- 설정의 선택형 runtime 목록에 `presentation-renderer`를 추가했습니다.
+- HWP/HWPX용 `document-renderer`도 MyBox `wiki/runtime/v1/document-renderer/0.8.4/`에서 내려받아 설치할 수 있도록 게시했습니다. 설치파일에는 rhwp 본체를 포함하지 않습니다.
+- LibreOffice 번들은 MYBOX `wiki/runtime/v1/presentation-renderer/26.2.4/` payload 또는 설치파일에 포함된 오프라인 번들의 SHA-256을 검증한 뒤 사용자 데이터의 `dependencies/libreoffice/26.2.4`에 atomic 설치합니다.
+- Online 환경은 MYBOX에서 번들을 내려받고, Full Offline 환경은 `resources/dependency-bundles/`에 같은 검증 번들을 포함할 수 있습니다. 공개 LibreOffice URL fallback은 제공하지 않습니다.
+- 앱 패키지에는 Portable 압축 해제를 위한 7-Zip helper를 포함하고, LibreOffice 자체는 MSI 등록이나 시스템 전역 설치 없이 private runtime으로 실행합니다.
+- 서비스 배포에서는 LibreOffice와 rhwp 자체를 설치 파일에 포함하지 않고, `wiki/runtime/v1/manifest.json`과 MYBOX payload를 통해 필요 시 내려받습니다. LibreOffice renderer의 자동·명시 설치 모두 공개 URL fallback을 사용하지 않으며, MYBOX payload가 없을 때는 검증된 오프라인 번들이 있는 경우에만 설치합니다.
+- Windows x64 설치파일은 대상 아키텍처의 네이티브 런타임만 포함하고 Electron 언어 리소스를 한국어·영어로 제한해 NSIS 임시 압축 해제 용량을 줄였습니다. ONNX 실행에 필요한 `DirectML.dll`은 유지합니다.
+- 설치 후 앱 재시작 전에는 `component_not_applied`, 재시작 후에는 `applied=true`로 상태를 명확히 구분합니다.
+- MYBOX 목록·매니페스트 요청은 제한시간 내 실패를 명확히 표시하고, 대용량 runtime payload 다운로드에는 별도 제한시간을 적용합니다. renderer 설치 실패 시 전체 설치가 무기한 대기하거나 자동 종료되지 않습니다.
+- LibreOffice payload 전송 스트림이 중단되면 자동 재시도하고, 요청 실패·payload 전송 중단·압축 해제 실패를 구분해 표시합니다.
+- MYBOX 저장공간 연결 상태와 renderer manifest·payload 배포 상태를 분리해 표시하며, 배포본 부재는 전체 설치 실패가 아닌 보류 상태로 안내합니다.
+- `presentation-renderer` 설치 실패·보류 메시지는 `Office 문서·PPT 렌더러`라는 사용자용 이름과 구체적인 원인을 사용합니다.
+- runtime 적용 재시작은 Electron의 graceful relaunch/quit 흐름을 사용해 Windows에서 앱이 닫힌 뒤 다시 열리지 않는 문제를 방지합니다.
+- 기존 설치 위에 업데이트할 때는 Weki 데이터 폴더·암호화 MYBOX 토큰·저장소 포인터를 보존하고, 명시적인 제거에서만 사용자 데이터를 삭제합니다.
 
-- `node --test test/ui-contract.test.mjs`로 v1.2.3 버전, 설치기 두 레이블, 온보딩·External AI 문서 및 동의 문구 계약을 확인합니다.
-- 관련 온보딩·처리 설정·Gemini credential/provider·AI processing·API 테스트와 production build를 함께 실행합니다.
-- Windows 패키지 생성과 전체 Electron E2E는 릴리스 패키징 단계에서 다시 확인합니다. 생성형 최종 답변 기능은 테스트·릴리스 범위가 아닙니다.
+## 검증 기준
+
+- managed dependency의 URL·SHA-256·entrypoint 검증, staging/atomic promotion, 재시작 적용 상태
+- LibreOffice 실제 1-slide PPTX OCR-only E2E
+- LibreOffice 실제 1-page DOCX OCR-only E2E
+- 기존 PDF visual evidence, PPTX 구조 추출, HWP/HWPX renderer, Electron onboarding 및 전체 회귀 테스트
+
+패키지 버전과 사용자 테스트 설치파일은 현재 `1.3.0`으로 고정되어 있습니다.
 
 ## Verified artifact
 
-- Source commit: `c027395c045fd438dd06c8d15885f52b98fce9d2`
-- Installer: `Weki-1.2.3-Setup.exe` (232118616 bytes)
-- SHA-256: `FDFD49D419FA4656BCD3830C37E5A721DBB1FBC03C2570E63EEB766FEBB55375`
-- SHA-512: `7F5416381A036CC5F25C06A2EACA417515D86116B4B0E2E74C50064A9631F007EF1AF441073CE776818FD8435E342C726E20062048277B9A09617B77F5156EFB`
+- Source commit: `70e9dc48fbd6c8ebc9bb3d6178153c72a6b322af`
+- Installer: `Weki-1.3.0-Setup.exe` (178490073 bytes)
+- SHA-256: `34E5906D12C09F559F62916DD8DE05AE2B70B190F43CACC20043634B997305EF`
+- SHA-512: `FE13F3A2A55E9B55E82F0199BE5DB2408AD9C298B64773FFA281D982987EC4F0273F5E491DAAEC60A723529741297B5CAE9E877E779F1FE9941A6FC2AAAEAFE5`
 - Update metadata: `release/latest.yml` records the matching base64 SHA-512, source commit, and release date from the builder output.
 
 ---
