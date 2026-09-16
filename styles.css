@@ -69,3 +69,6 @@
 @media(max-width:580px){.model-row{grid-template-columns:1fr}.model-row button{width:100%}.connection-row{align-items:stretch;flex-direction:column}.connection-row button{width:100%}}
 .settings-grid>.retrieval-settings{order:1}.settings-grid>.external-ai-settings{order:2}.app-version{display:block;padding:0 8px 8px;color:var(--outline);font:11px "JetBrains Mono",monospace;letter-spacing:.04em}
 @media(max-width:1279px){.app-version{display:none}}
+.toast{pointer-events:none}.toast button{pointer-events:auto}
+.toast{bottom:160px;max-width:min(520px,calc(100vw - 48px))}
+@media(max-width:580px){.toast{left:10px;right:10px;bottom:150px;max-width:none}}

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createAiCredentialIpcHandlers, createAiCredentialsStore, waitForLocalServerReady } from "../src/server/ai-credentials.mjs";
+import { createAiCredentialIpcHandlers, createAiCredentialsStore, LOCAL_SERVER_READY_TIMEOUT_MS, startLocalServerAndWaitForReady, waitForLocalServerReady } from "../src/server/ai-credentials.mjs";
 
 async function temporaryFile(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "weki-ai-credentials-"));
@@ -162,6 +162,21 @@ test("local server readiness waits for a child ready message without an HTTP req
   child.emit("message", { type: "weki-server-ready" });
   await readiness;
   assert.equal(resolved, true);
+});
+
+test("local server readiness listener is attached immediately when the child is spawned", async () => {
+  const child = new EventEmitter();
+  const { child: spawnedChild, ready } = startLocalServerAndWaitForReady(() => {
+    queueMicrotask(() => child.emit("message", { type: "weki-server-ready" }));
+    return child;
+  });
+
+  assert.equal(spawnedChild, child);
+  await ready;
+});
+
+test("local server startup allows time for first-run renderer upgrades", () => {
+  assert.equal(LOCAL_SERVER_READY_TIMEOUT_MS, 30_000);
 });
 
 test("local server readiness rejects after its bounded timeout", async () => {

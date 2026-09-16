@@ -53,10 +53,36 @@ async function readState(rootDirectory) {
   try { return JSON.parse(await fs.readFile(path.join(rootDirectory, STATE_FILE), "utf8")); } catch { return { format: "weki-runtime-state", version: 1, components: {} }; }
 }
 
+const STATE_RENAME_RETRY_CODES = new Set(["EBUSY", "EACCES", "EPERM"]);
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function renameWithRetry(source, destination, attempts = 12) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await fs.rename(source, destination);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!STATE_RENAME_RETRY_CODES.has(error?.code) || attempt === attempts - 1) throw error;
+      await wait(Math.min(1000, 50 * (2 ** attempt)));
+    }
+  }
+  throw lastError;
+}
+
 async function writeState(rootDirectory, state) {
   const temporary = path.join(rootDirectory, `${STATE_FILE}.${crypto.randomUUID()}.partial`);
   await fs.writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
-  await fs.rename(temporary, path.join(rootDirectory, STATE_FILE));
+  try {
+    await renameWithRetry(temporary, path.join(rootDirectory, STATE_FILE));
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function getComponentState(rootDirectory) {
@@ -152,8 +178,8 @@ async function installComponentUnlocked({ rootDirectory, manifest, componentId, 
     await fs.mkdir(componentRoot, { recursive: true });
     const previous = `${target}.previous-${Date.now()}`;
     try { await fs.rename(target, previous); } catch (error) { if (error.code !== "ENOENT") throw error; }
-    await fs.rename(stage, target);
-    await fs.rename(manifestStage, path.join(rootDirectory, MANIFEST_FILE));
+    await renameWithRetry(stage, target);
+    await renameWithRetry(manifestStage, path.join(rootDirectory, MANIFEST_FILE));
     state.components[componentId] = { ...state.components[componentId], id: componentId, version, status: "ready", progress: 100, completedFiles: totalFiles, totalFiles, bytesDownloaded: totalBytes, totalBytes, currentFile: null, path: target, sourceType, source, updatedAt: new Date().toISOString(), previousPath: previous };
     await writeState(rootDirectory, state);
     return state.components[componentId];

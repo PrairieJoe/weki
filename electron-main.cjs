@@ -163,6 +163,13 @@ const writeRuntimeRestartLog = (event) => {
     fs.appendFileSync(path.join(logDir, 'runtime-restart.log'), `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, 'utf8');
   } catch { /* Restart diagnostics must never prevent the app from starting or quitting. */ }
 };
+const writeWindowFocusLog = (event) => {
+  try {
+    const logDir = path.join(activeRuntimeDir, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'ui-focus.log'), `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...event })}\n`, 'utf8');
+  } catch { /* Focus diagnostics must never prevent the app from running. */ }
+};
 let appStartupPhase = 'waiting-for-electron-ready';
 const traceStartupPhase = (phase, details = {}) => {
   appStartupPhase = phase;
@@ -227,9 +234,10 @@ const restartOwnedServer = async () => {
       setTimeout(finish, 2000);
     });
   }
-  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
-  const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
-  await waitForLocalServerReady(server);
+  const { startLocalServerAndWaitForReady } = await import('./src/server/ai-credentials.mjs');
+  const startup = startLocalServerAndWaitForReady(() => spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }));
+  server = startup.child;
+  await startup.ready;
   await sendStoredGeminiKeyToServer();
   return true;
 };
@@ -245,9 +253,10 @@ const reloadOwnedServer = async () => {
       setTimeout(finish, 2000);
     });
   }
-  const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
-  server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
-  await waitForLocalServerReady(server);
+  const { startLocalServerAndWaitForReady } = await import('./src/server/ai-credentials.mjs');
+  const startup = startLocalServerAndWaitForReady(() => spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }));
+  server = startup.child;
+  await startup.ready;
   await sendStoredGeminiKeyToServer();
   return true;
 };
@@ -315,6 +324,34 @@ ipcMain.handle('weki:restart', () => {
   app.quit();
   return { ok: true };
 });
+ipcMain.handle('weki:focus-window', (event) => {
+  const target = BrowserWindow.fromWebContents(event.sender);
+  if (!target || target.isDestroyed()) return false;
+  writeWindowFocusLog({ type: 'focus-request', beforeFocused: target.isFocused(), visible: target.isVisible(), minimized: target.isMinimized() });
+  if (target.isMinimized()) target.restore();
+  target.show();
+  target.focus();
+  // BrowserWindow focus can be restored while the renderer's WebContents
+  // remains unfocused (document.hasFocus() stays false). Explicitly focus the
+  // web view so the next pointer/keyboard event reaches the active composer.
+  target.focusOnWebView();
+  target.webContents.focus();
+  writeWindowFocusLog({ type: 'focus-result', afterFocused: target.isFocused(), webContentsFocused: target.webContents.isFocused(), visible: target.isVisible(), minimized: target.isMinimized() });
+  return true;
+});
+ipcMain.on('weki:search-input-event', (event, payload) => {
+  const target = BrowserWindow.fromWebContents(event.sender);
+  if (!target || target.isDestroyed()) return;
+  const type = String(payload?.type || 'unknown');
+  if (!['pointerdown', 'focus', 'blur', 'input'].includes(type)) return;
+  writeWindowFocusLog({
+    type: `renderer-${type}`,
+    activeElementId: String(payload?.activeElementId || '').slice(0, 40),
+    hasFocus: Boolean(payload?.hasFocus),
+    visibility: String(payload?.visibility || '').slice(0, 20),
+    windowFocused: target.isFocused(),
+  });
+});
 ipcMain.handle('weki:watch-runtime-install', async (_event, startedAt) => {
   if (typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return { ok: false, reason: 'invalid-batch-start-time' };
   if (!activeDataDir || !appUrl) return { ok: false, reason: 'app-not-ready' };
@@ -341,6 +378,7 @@ ipcMain.handle('weki:watch-runtime-install', async (_event, startedAt) => {
       },
       onEvent: writeRuntimeRestartLog,
       requestRestart: async () => {
+        if (watch.deferred || controller.signal.aborted) throw new Error('runtime-restart-deferred');
         watch.relaunchRequested = true;
         app.relaunch({ args: relaunchArguments([runtimeAutoRelaunchArgument]) });
         app.quit();
@@ -357,6 +395,15 @@ ipcMain.handle('weki:watch-runtime-install', async (_event, startedAt) => {
     writeRuntimeRestartLog({ type: 'watch-start-failed', batchStartedAt: startedAt, message: String(error?.message || error) });
     return { ok: false, reason: 'watcher-start-failed' };
   }
+});
+ipcMain.handle('weki:cancel-runtime-install-watch', () => {
+  const watch = runtimeInstallWatch;
+  if (!watch) return { ok: true, alreadyStopped: true };
+  watch.deferred = true;
+  watch.controller.abort();
+  writeRuntimeRestartLog({ type: 'watch-cancelled', batchStartedAt: watch.startedAt, reason: 'renderer-navigation' });
+  if (runtimeInstallWatch === watch) runtimeInstallWatch = null;
+  return { ok: true, cancelled: true };
 });
 app.whenReady().then(async () => {
   try {
@@ -408,10 +455,11 @@ app.whenReady().then(async () => {
       else delete activeServerEnv.NAVER_MBOX_TOKEN;
       if (!app.isPackaged) activeServerEnv.WEKI_ENV_FILE = path.join(__dirname, '.env');
       traceStartupPhase('spawn-local-server', { port: appPort });
-      server = spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }); ownsServer = true;
-      const { waitForLocalServerReady } = await import('./src/server/ai-credentials.mjs');
-      traceStartupPhase('wait-local-server-ready', { pid: server.pid, port: appPort });
-      await waitForLocalServerReady(server);
+      const { startLocalServerAndWaitForReady, LOCAL_SERVER_READY_TIMEOUT_MS } = await import('./src/server/ai-credentials.mjs');
+      const startup = startLocalServerAndWaitForReady(() => spawn(process.execPath, [path.join(__dirname, 'server.mjs')], { env: activeServerEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true }));
+      server = startup.child; ownsServer = true;
+      traceStartupPhase('wait-local-server-ready', { pid: server.pid, port: appPort, timeoutMs: LOCAL_SERVER_READY_TIMEOUT_MS });
+      await startup.ready;
       traceStartupPhase('local-server-ready', { port: appPort });
     } else {
       traceStartupPhase('reuse-existing-server');
@@ -422,6 +470,7 @@ app.whenReady().then(async () => {
     }
     traceStartupPhase('create-window');
     const window = new BrowserWindow({ width: 1360, height: 900, minWidth: 1024, minHeight: 700, title: 'Weki', icon: fs.existsSync(packagedIconPath) ? packagedIconPath : undefined, webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'src', 'preload.cjs') } });
+    for (const eventName of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore']) window.on(eventName, () => writeWindowFocusLog({ type: `window-${eventName}`, focused: window.isFocused(), visible: window.isVisible(), minimized: window.isMinimized() }));
     window.webContents.once('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
       if (isRuntimeAutoRelaunch && isMainFrame) writeRuntimeRestartLog({ type: 'window-load-failed', errorCode, errorDescription });
     });

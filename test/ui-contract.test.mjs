@@ -26,6 +26,7 @@ const releaseNotesV121 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.1.md
 const releaseNotesV122 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.2.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV123 = await readFile(new URL("../docs/RELEASE_NOTES_V1.2.3.md", import.meta.url), "utf8").catch(() => "");
 const releaseNotesV130 = await readFile(new URL("../docs/RELEASE_NOTES_V1.3.0.md", import.meta.url), "utf8").catch(() => "");
+const releaseNotesV131 = await readFile(new URL("../docs/RELEASE_NOTES_V1.3.1.md", import.meta.url), "utf8").catch(() => "");
 const myboxRuntimeManifest = await readFile(new URL("../resources/runtime-manifests/mybox-runtime-v1.json", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
@@ -42,6 +43,60 @@ test("Weki search has a persistent composer and accessible navigation", () => {
   assert.match(styles, /\.search-composer/);
   assert.match(main, /aria-current=/);
   assert.match(main, /role="search"/);
+});
+
+test("persistent toasts do not block the search composer", () => {
+  assert.match(styles, /\.toast\s*\{[^}]*pointer-events:\s*none/s);
+  assert.match(styles, /\.toast\s+button\s*\{[^}]*pointer-events:\s*auto/s);
+  assert.match(styles, /\.toast\s*\{[^}]*bottom:\s*160px/s);
+});
+
+test("runtime installation does not redraw a page reached while installation is pending", () => {
+  assert.match(main, /const originPage=state\.page/);
+  assert.match(main, /if\(state\.page===originPage\)render\(\);/);
+});
+
+test("search focuses its composer after navigation", () => {
+  assert.match(main, /function focusSearchComposer\(\)/);
+  assert.match(main, /input\.focus\(\{preventScroll:true\}\)/);
+  assert.match(main, /state\.page!=="search"/);
+});
+
+test("search navigation can restore native Electron window focus", () => {
+  assert.match(main, /wekiApp\?\.focusWindow\?\.\(\)/);
+  assert.match(preload, /focusWindow:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('weki:focus-window'\)/);
+  assert.match(electronMain, /ipcMain\.handle\('weki:focus-window'/);
+  assert.match(electronMain, /focusOnWebView\(\)/);
+});
+
+test("search composer retries native focus on the actual pointer event", () => {
+  assert.match(main, /function bindSearchComposerFocus\(input\)/);
+  assert.match(main, /input\.addEventListener\("pointerdown"/);
+  assert.match(main, /input\.addEventListener\("focus"/);
+  assert.match(main, /input\.addEventListener\("input"/);
+  assert.match(preload, /reportSearchInput:\s*\(payload\)\s*=>\s*ipcRenderer\.send\('weki:search-input-event'/);
+  assert.match(electronMain, /ipcMain\.on\('weki:search-input-event'/);
+  assert.match(electronMain, /ui-focus\.log/);
+});
+
+test("search preserves text typed before Enter across renderer refreshes", () => {
+  assert.match(main, /query\"\)\?\.addEventListener\(\"input\",\(event\)=>\{state\.query=event\.currentTarget\?\.value\|\|\""\}\)/);
+});
+
+test("navigation renders the destination before waiting for status refresh", () => {
+  assert.match(main, /async function navigateFromNav\(targetPage\)\{[\s\S]*?state\.page=targetPage;\s*render\(\);\s*await refresh\(\)/);
+  assert.match(main, /if\(state\.page===targetPage&&!searchComposerIsActive\(\)\)render\(\);/);
+});
+
+test("navigation does not replace an actively edited search input after refresh", () => {
+  assert.match(main, /function searchComposerIsActive\(\)/);
+  assert.match(main, /if\(state\.page===targetPage&&!searchComposerIsActive\(\)\)render\(\);/);
+});
+
+test("unrelated renders defer while the search composer is active", () => {
+  assert.match(main, /render=function\(\{force=false\}=\{\}\)\{[\s\S]*?if\(!force&&searchComposerIsActive\(\)\)return;/);
+  assert.match(main, /state\.loading=true;\s*render\(\{force:true\}\)/);
+  assert.match(main, /state\.loading=false;\s*render\(\{force:true\}\)/);
 });
 
 test("Weki search presents bounded highlighted evidence and integer relevance", () => {
@@ -113,8 +168,10 @@ test("Weki stores the selected data path outside AppData and does not silently f
 });
 
 test("Electron startup waits for its child server IPC readiness and traces auto-restart startup", () => {
-  assert.match(electronMain, /waitForLocalServerReady/);
-  assert.match(electronMain, /await waitForLocalServerReady\(server\)/);
+  assert.match(electronMain, /startLocalServerAndWaitForReady/);
+  assert.match(electronMain, /startLocalServerAndWaitForReady\(\(\) => spawn/);
+  assert.doesNotMatch(electronMain, /spawn\(process\.execPath, \[path\.join\(__dirname, 'server\.mjs'\)\][\s\S]{0,240}await import\('\.\/src\/server\/ai-credentials\.mjs'\)/);
+  assert.match(electronMain, /await startup\.ready/);
   assert.doesNotMatch(electronMain, /await waitForServer\(\)/);
   assert.match(electronMain, /startup-phase/);
   assert.match(electronMain, /startup-failed/);
@@ -330,23 +387,25 @@ test("Weki applies the supplied icon across the packaged app and UI", async () =
   assert.match(styles, /\.brand-mark img\{[^}]*object-fit:contain/);
 });
 
-test("Weki source release metadata targets v1.3.0", () => {
-  assert.equal(packageJson.version, "1.3.0");
-  assert.equal(packageLock.version, "1.3.0");
-  assert.equal(packageLock.packages?.[""].version, "1.3.0");
+test("Weki source and release metadata are frozen at v1.3.1", () => {
+  assert.equal(packageJson.version, "1.3.1");
+  assert.equal(packageLock.version, "1.3.1");
+  assert.equal(packageLock.packages?.[""].version, "1.3.1");
   assert.equal(packageJson.build?.artifactName, "Weki-${version}-Setup.exe");
   assert.match(releaseNotesV121, /1\.2\.1/);
-  assert.match(buildInfo, /Application version:\s*1\.3\.0/);
+  assert.match(buildInfo, /Application version:\s*1\.3\.1/);
   const sourceCommit = buildInfo.match(/^Application source commit:\s*([a-f0-9]{40})$/m)?.[1];
   assert.ok(sourceCommit, "build metadata should identify its full application source commit");
-  assert.match(latestYml, /version:\s*1\.3\.0/);
+  assert.match(latestYml, /version:\s*1\.3\.1/);
   assert.match(latestYml, new RegExp(`source commit:\\s*${sourceCommit}`));
-  assert.match(sha256, /Weki-1\.3\.0-Setup\.exe\s+[A-Fa-f0-9]{64}/);
+  assert.match(sha256, /Weki-1\.3\.1-Setup\.exe\s+[A-Fa-f0-9]{64}/);
   assert.match(releaseNotesV122, /1\.2\.2/);
   assert.match(releaseNotesV122, /온보딩/);
   assert.match(releaseNotesV122, /고품질 검색 구성요소/);
   assert.match(releaseNotesV123, /1\.2\.3/);
   assert.match(releaseNotesV130, /LibreOffice/);
+  assert.match(releaseNotesV131, /검색 입력/);
+  assert.match(releaseNotesV131, /EPERM/);
   assert.ok(releaseNotesGenerated.includes(`Source commit: \`${sourceCommit}\``));
 });
 
@@ -722,6 +781,15 @@ test("Weki delegates runtime-install completion monitoring and relaunch to the m
   assert.match(electronMain, /if \(!watch\.relaunchRequested\) writeRuntimeRestartLog/);
   assert.match(electronMain, /runtime-restart\.log/);
   assert.match(electronMain, /fetch\(`\$\{appUrl\}\/api\/jobs`\)/);
+});
+
+test("Weki defers runtime auto-restart when leaving settings during installation", () => {
+  assert.match(main, /runtimeInstallRestartDeferred/);
+  assert.match(main, /deferRuntimeInstallRestart/);
+  assert.match(main, /restart-deferred-after-navigation/);
+  assert.match(preload, /cancelRuntimeInstallWatch:.*weki:cancel-runtime-install-watch/);
+  assert.match(electronMain, /ipcMain\.handle\('weki:cancel-runtime-install-watch'/);
+  assert.match(electronMain, /watch\.deferred/);
 });
 
 test("Weki keeps search-index recovery out of the renderer settings UI", () => {

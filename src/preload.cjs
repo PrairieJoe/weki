@@ -14,5 +14,8 @@ contextBridge.exposeInMainWorld('wekiAiCredentials', {
 
 contextBridge.exposeInMainWorld('wekiApp', {
   restart: () => ipcRenderer.invoke('weki:restart'),
+  focusWindow: () => ipcRenderer.invoke('weki:focus-window'),
+  reportSearchInput: (payload) => ipcRenderer.send('weki:search-input-event', payload),
   watchRuntimeInstall: (startedAt) => ipcRenderer.invoke('weki:watch-runtime-install', startedAt),
+  cancelRuntimeInstallWatch: () => ipcRenderer.invoke('weki:cancel-runtime-install-watch'),
 });

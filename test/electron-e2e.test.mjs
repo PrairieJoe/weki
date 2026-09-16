@@ -63,13 +63,7 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
   const port = await freePort();
   const debugPort = await freePort();
   const testEnv = { ...process.env, WEKI_DATA_DIR: dataDir, WEKI_RUNTIME_DIR: runtimeDir, WEKI_SEARCH_V2: "1", WEKI_PORT: String(port), WEKI_DISABLE_ENV_FILE: "1", WEKI_DISABLE_INITIAL_MYBOX_SYNC: "1" };
-  const serverProcess = spawn(process.execPath, [path.join(projectRoot, "server.mjs")], { cwd: projectRoot, env: testEnv, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let processOutput = "";
-  serverProcess.stdout.on("data", (chunk) => { processOutput += chunk.toString(); });
-  serverProcess.stderr.on("data", (chunk) => { processOutput += chunk.toString(); });
-  await waitFor("Weki server", async () => {
-    try { return (await fetch(`http://127.0.0.1:${port}/api/status`)).ok; } catch { return false; }
-  }, { timeout: 30_000, interval: 200 }).catch((error) => { throw new Error(`${error.message}\n${processOutput}`); });
   const electronProcess = spawn(require("electron"), ["--disable-gpu", "--no-sandbox", `--remote-debugging-port=${debugPort}`, projectRoot], {
     cwd: projectRoot,
     env: testEnv,
@@ -84,7 +78,6 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
   t.after(async () => {
     await browser.close().catch(() => {});
     await stopProcess(electronProcess);
-    await stopProcess(serverProcess);
     await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
@@ -117,17 +110,21 @@ test("Electron flow indexes a visual document and shows concise highlighted evid
     const job = snapshot.jobs.jobs.find((item) => item.name === path.basename(source));
     const document = snapshot.documents.documents.find((item) => item.name === path.basename(source));
     const indexed = document && snapshot.audit.entries.some((item) => item.type === "registration" && item.documentId === document.id);
+    // The jobs API intentionally hides completed jobs; absence of the matching
+    // visible job therefore means the queue has finished for this document.
+    const jobCompleted = !job;
     lastJob = job;
     if (job?.status === "failed") throw new Error(job.detail || "processing failed");
-    return indexed ? { status: "completed", documentId: document.id } : null;
+    return indexed && jobCompleted ? { status: "completed", documentId: document.id } : null;
   }, { timeout: 300_000 }).catch((error) => {
     throw new Error(`${error.message}\nJOB: ${JSON.stringify(lastJob)}\nPROCESS: ${processOutput}`);
   });
   assert.equal(completedJob.status, "completed");
 
   await page.locator('button.nav-item[data-nav="search"]').click();
+  await page.waitForFunction(() => document.activeElement?.id === "query", null, { timeout: 15_000 });
   const closeToast = page.locator("[data-close-toast]");
-  if (await closeToast.count()) await closeToast.click();
+  assert.equal(await closeToast.count(), 1, "the queued-job notification should still be visible on search");
   await page.locator("#query").fill(query);
   await page.locator("#run-search").click();
   const response = await waitFor("visual search result", async () => page.evaluate(async (searchQuery) => {

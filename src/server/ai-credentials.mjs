@@ -111,9 +111,16 @@ export function createAiCredentialIpcHandlers({ getStore, encryptionAvailable, r
   };
 }
 
-export function waitForLocalServerReady(child, { timeoutMs = 15_000 } = {}) {
+export const LOCAL_SERVER_READY_TIMEOUT_MS = 30_000;
+
+export function startLocalServerAndWaitForReady(spawnChild, { timeoutMs = LOCAL_SERVER_READY_TIMEOUT_MS } = {}) {
+  const child = spawnChild();
+  return { child, ready: waitForLocalServerReady(child, { timeoutMs }) };
+}
+
+export function waitForLocalServerReady(child, { timeoutMs = LOCAL_SERVER_READY_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    const timeout = Number.isFinite(Number(timeoutMs)) ? Math.max(0, Number(timeoutMs)) : 15_000;
+    const timeout = Number.isFinite(Number(timeoutMs)) ? Math.max(0, Number(timeoutMs)) : LOCAL_SERVER_READY_TIMEOUT_MS;
     let timer;
     const cleanup = () => {
       child.removeListener("message", onMessage);

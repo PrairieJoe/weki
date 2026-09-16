@@ -39,6 +39,46 @@ test("component install uses partial staging, hash verification and atomic promo
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test("component state promotion retries transient Windows rename locks", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-rename-retry-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const originalRename = fs.rename;
+  let transientFailures = 0;
+  fs.rename = async (source, destination) => {
+    if (destination.endsWith(path.join(root, "component-state.json")) && transientFailures < 2) {
+      transientFailures += 1;
+      throw Object.assign(new Error("temporary Windows file lock"), { code: "EPERM" });
+    }
+    return originalRename(source, destination);
+  };
+  t.after(() => { fs.rename = originalRename; });
+  const bytes = Buffer.from("abc");
+  const manifest = { format: "weki-runtime-manifest", version: 1, appCompatibility: ">=1.0.0", components: [{ id: "semantic-model", version: "1.0.0", files: [{ path: "model.onnx", size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), url: "https://example.test/model.onnx" }] }] };
+  const result = await installComponent({ rootDirectory: root, manifest, componentId: "semantic-model", version: "1.0.0", fetchImpl: async () => new Response(bytes) });
+  assert.equal(result.status, "ready");
+  assert.equal(transientFailures, 2);
+});
+
+test("runtime manifest promotion retries transient Windows rename locks", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-manifest-retry-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const originalRename = fs.rename;
+  let transientFailures = 0;
+  fs.rename = async (source, destination) => {
+    if (destination.endsWith(path.join(root, "manifest.json")) && transientFailures < 2) {
+      transientFailures += 1;
+      throw Object.assign(new Error("temporary Windows manifest lock"), { code: "EPERM" });
+    }
+    return originalRename(source, destination);
+  };
+  t.after(() => { fs.rename = originalRename; });
+  const bytes = Buffer.from("abc");
+  const manifest = { format: "weki-runtime-manifest", version: 1, appCompatibility: ">=1.0.0", components: [{ id: "semantic-reranker", version: "1.0.0", files: [{ path: "reranker.mjs", size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), url: "https://example.test/reranker.mjs" }] }] };
+  const result = await installComponent({ rootDirectory: root, manifest, componentId: "semantic-reranker", version: "1.0.0", fetchImpl: async () => new Response(bytes) });
+  assert.equal(result.status, "ready");
+  assert.equal(transientFailures, 2);
+});
+
 test("component install records file-level progress and failure provenance while downloading", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "weki-runtime-progress-"));
   const files = [Buffer.from("one"), Buffer.from("two")];
