@@ -160,9 +160,8 @@ async function readDb() {
     error.code = "storage_database_invalid";
     throw error;
   }
-  let normalized = false;
   for (const [key, fallback] of [["documents", []], ["jobs", []], ["synonyms", []], ["feedback", []], ["audit", []]]) {
-    if (db[key] == null) { db[key] = fallback; normalized = true; continue; }
+    if (db[key] == null) { db[key] = fallback; continue; }
     if (!Array.isArray(db[key])) {
       const error = new Error(`로컬 저장소의 knowledge-base.json 필드(${key}) 형식이 올바르지 않습니다.`);
       error.code = "storage_database_invalid";
@@ -170,14 +169,15 @@ async function readDb() {
     }
   }
   for (const document of db.documents) {
-    if (!Array.isArray(document.units)) { document.units = []; normalized = true; }
+    if (!Array.isArray(document.units)) document.units = [];
   }
-  if (normalized) await writeDb(db);
+  // Normalize legacy snapshots in memory. Persisting from every concurrent
+  // reader can enqueue stale snapshots that overwrite a newer mutation.
   db.maintenance ??= null;
   const normalizedSettings = normalizeProcessingSettings(db.settings);
-  if (JSON.stringify(normalizedSettings) !== JSON.stringify(db.settings)) { db.settings = { ...(db.settings || {}), ...normalizedSettings }; await writeDb(db); }
+  if (JSON.stringify(normalizedSettings) !== JSON.stringify(db.settings)) db.settings = { ...(db.settings || {}), ...normalizedSettings };
   const normalizedSynonyms = normalizeSynonymCollection(db.synonyms);
-  if (JSON.stringify(normalizedSynonyms) !== JSON.stringify(db.synonyms)) { db.synonyms = normalizedSynonyms; await writeDb(db); }
+  if (JSON.stringify(normalizedSynonyms) !== JSON.stringify(db.synonyms)) db.synonyms = normalizedSynonyms;
   for (const doc of db.documents) { doc.name = normalizeFilename(doc.name); if (doc.originalName) doc.originalName = normalizeFilename(doc.originalName); else if (doc.name) doc.originalName = doc.name; }
   for (const job of db.jobs) job.name = normalizeFilename(job.name);
   if (!originalStorageMigrated) {
@@ -641,6 +641,17 @@ async function runQueue() {
       } catch (error) { const fresh = await readDb(); const freshJob = fresh.jobs.find((item) => item.id === job.id); if (freshJob && error instanceof JobInterrupted) { freshJob.status = error.status; freshJob.detail = error.message; freshJob.interruptedAt = new Date().toISOString(); await writeDb(fresh); } else if (freshJob) { freshJob.status = "failed"; freshJob.progress = 0; freshJob.detail = error.message; await writeDb(fresh); } }
     }
   } finally { queueRunning = false; }
+}
+async function waitForQueueIdle(timeout = 30_000) {
+  const started = Date.now();
+  while (queueRunning) {
+    if (Date.now() - started >= timeout) {
+      const error = new Error("Processing Queue가 아직 종료되지 않았습니다.");
+      error.code = "queue_busy";
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 const createLocalOcrWorker = () => createWorker("eng+kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
 const createVisualOcrWorker = () => createWorker(process.env.WEKI_VISUAL_OCR_LANG || "kor", 1, { langPath: tessdataDir, gzip: true, cacheMethod: "none" });
@@ -1947,6 +1958,7 @@ app.get("/api/documents/:id/visual/:name", async (req, res) => {
   } catch { res.status(422).end(); }
 });
 app.delete("/api/data", async (req, res) => {
+  try { await waitForQueueIdle(); } catch (error) { return res.status(409).json({ error: error.message || "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." }); }
   const db = await readDb(); if (activeJobs(db).length || db.maintenance) return res.status(409).json({ error: "Processing Queue가 비어 있고 Maintenance 작업이 없어야 합니다." });
   if (req.get("x-weki-confirmation") !== "DELETE ALL DOCUMENTS") return res.status(400).json({ error: "확인 문구가 일치하지 않습니다." });
   db.maintenance = { type: "delete-all", startedAt: new Date().toISOString() }; await writeDb(db);
