@@ -13,6 +13,7 @@
 - 로컬 서버는 시작 직후 준비 메시지를 수신하고 첫 실행의 렌더러 업그레이드 시간을 고려해 제한 시간 안에 준비 상태를 판정합니다.
 - Windows에서 구성요소 상태·manifest·설치 폴더를 교체할 때 일시적인 `EPERM`·`EBUSY`·`EACCES` 파일 잠금을 자동 재시도합니다.
 - 검색 포커스 요청과 렌더러 입력 이벤트를 `.runtime/logs/ui-focus.log`에 기록해 실사용 환경의 포커스 문제를 확인할 수 있습니다.
+- 전체 문서 삭제는 처리 큐의 마지막 저장이 끝난 뒤 실행되고, 동시 상태 조회가 오래된 저장소 내용을 삭제 결과 위에 덮어쓰지 않도록 보호합니다.
 
 ## 검증
 
@@ -23,10 +24,10 @@
 
 ## Verified artifact
 
-- Source commit: `6c50b3e5ecfb90d65edbce8206264321de15b431`
-- Installer: `Weki-1.3.1-Setup.exe` (178491965 bytes)
-- SHA-256: `A76BD351E785883D52D9F4E15F3C8ABD22972590562424ADFB42888C5CA52CD2`
-- SHA-512: `AB2B65C070498570A59F69BEA2B8464022457EAAD29C02C228DC801BCB7BC61AEE35FE8EF31105A53509CA429306723ED645CD5D3B9474BB9E88B3A131BB1128`
+- Source commit: `1ac7b1125066f4cdb859bef9955ca6ad4217e540`
+- Installer: `Weki-1.3.1-Setup.exe` (178492132 bytes)
+- SHA-256: `C7454512D243C7800B36F721DC072A5C1D93E94D24517752ECCED38ECB69CE1A`
+- SHA-512: `A4623A03BABD77E2EC75A399C71DCACF0DB0354CABC2FA6FA3E98BD00B15464159E73C057CE80ED038ABD7E71B0B5017BC3E739B00A6A1D6AFD7A19323F39378`
 - Update metadata: `release/latest.yml` records the matching base64 SHA-512, source commit, and release date from the builder output.
 
 ---

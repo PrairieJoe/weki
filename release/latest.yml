@@ -1,9 +1,9 @@
-# source commit: 6c50b3e5ecfb90d65edbce8206264321de15b431
+# source commit: 1ac7b1125066f4cdb859bef9955ca6ad4217e540
 version: 1.3.1
 files:
   - url: Weki-1.3.1-Setup.exe
-    sha512: qytlwHBJhXCln2m+orhGQCJFfqrSnALCKNyAG8t7xhruNf6O8xEFpTUJykKTBnI+1kXNXTuUdLueiLOhMbsRKA==
-    size: 178491965
+    sha512: pGI6A7q9d+LsdaOZxx3Kzw2wNUyrwvpvo+mL0AsVRkFZ5zwFfOgO0Dir1+cbC1AXvD5zmwCmodav16GTI/OTeA==
+    size: 178492132
 path: Weki-1.3.1-Setup.exe
-sha512: qytlwHBJhXCln2m+orhGQCJFfqrSnALCKNyAG8t7xhruNf6O8xEFpTUJykKTBnI+1kXNXTuUdLueiLOhMbsRKA==
-releaseDate: '2026-09-16T09:06:33.551Z'
+sha512: pGI6A7q9d+LsdaOZxx3Kzw2wNUyrwvpvo+mL0AsVRkFZ5zwFfOgO0Dir1+cbC1AXvD5zmwCmodav16GTI/OTeA==
+releaseDate: '2026-09-16T10:10:35.877Z'
